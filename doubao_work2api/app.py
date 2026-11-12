@@ -125,7 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, Any]:
         return {
             "ok": True,
-            "service": "doubao-work2api",
+            "service": "doubaowork2api",
             "version": __version__,
             "accounts": len(pool.accounts),
             "available_accounts": sum(

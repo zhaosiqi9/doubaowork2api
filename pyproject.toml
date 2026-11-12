@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-doubao-work2api = "doubao_work2api.__main__:main"
+doubaowork2api = "doubao_work2api.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["doubao_work2api*"]
