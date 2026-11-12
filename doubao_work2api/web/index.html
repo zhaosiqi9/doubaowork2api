@@ -1,220 +1,265 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>DoubaoWork2API 控制台</title>
   <link rel="stylesheet" href="/ui-assets/app.css">
 </head>
 <body>
-  <div class="page-shell">
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="DoubaoWork2API 首页">
-        <span class="brand-mark">DB</span>
-        <span>
-          <strong>DoubaoWork2API</strong>
-          <small>Direct relay console</small>
-        </span>
-      </a>
-      <div class="topbar-actions">
-        <span id="connectionState" class="status-pill status-idle">未连接</span>
-        <button id="autoRefreshButton" class="button button-quiet" type="button" aria-pressed="false">自动刷新 关</button>
-        <button id="logoutButton" class="button button-quiet" type="button">退出</button>
+  <div id="loginView" class="login-shell" hidden>
+    <section class="login-story">
+      <span class="eyebrow">LOCAL CONTROL PLANE / 0.1.0</span>
+      <h1>豆包工作版，<br><em>变成一条清晰的 API。</em></h1>
+      <p>账号、模型、请求与用量都留在你自己的机器上。没有云端中转，也没有隐藏的凭证上报。</p>
+      <div class="story-grid">
+        <div><b>8</b><span>已映射模型</span></div>
+        <div><b>0</b><span>第三方上传</span></div>
+        <div><b>v1</b><span>OpenAI 兼容</span></div>
       </div>
-    </header>
+    </section>
+    <form id="loginForm" class="login-card">
+      <span class="eyebrow">AUTHENTICATION</span>
+      <h2>进入控制台</h2>
+      <p>输入启动服务时配置的 <code>DOUBAO_WORK_API_KEY</code>。</p>
+      <label class="field"><span>API KEY</span><input id="loginKey" type="password" autocomplete="current-password" placeholder="sk-..." required></label>
+      <p id="loginError" class="form-error" role="alert" hidden></p>
+      <button class="button primary wide" type="submit">连接网关 <span>→</span></button>
+    </form>
+  </div>
 
-    <main>
-      <section id="loginView" class="login-layout" hidden>
-        <div class="login-copy">
-          <span class="eyebrow">LOCAL CONTROL PLANE</span>
-          <h1>把豆包工作版<br>变成稳定的 API。</h1>
-          <p>账号凭证只保存在你自己的服务器。控制台不展示 Cookie，也不会把账号数据发送到任何第三方。</p>
-          <div class="signal-list" aria-label="控制台能力">
-            <span>账号池</span>
-            <span>冷却监控</span>
-            <span>在线测试</span>
-            <span>请求日志</span>
-          </div>
+  <div id="appView" class="app-shell" hidden>
+    <aside id="sidebar" class="sidebar" aria-label="主导航">
+      <div class="brand">
+        <div class="brand-mark">DB</div>
+        <div class="brand-copy"><b>DoubaoWork</b><span>gateway console</span></div>
+      </div>
+      <div class="nav-label">工作台</div>
+      <nav class="nav">
+        <button type="button" class="nav-item" data-tab="overview">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>总览</span>
+        </button>
+        <button type="button" class="nav-item" data-tab="gateway">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span>网关</span>
+        </button>
+        <button type="button" class="nav-item" data-tab="accounts">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg><span>账号</span>
+        </button>
+        <button type="button" class="nav-item" data-tab="analytics">
+          <svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="M7 15l3.5-4 3 2.5L20 7"/></svg><span>用量</span>
+        </button>
+        <button type="button" class="nav-item" data-tab="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg><span>设置</span>
+        </button>
+        <button type="button" class="nav-item" data-tab="logs">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg><span>日志</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <a href="https://github.com/ardeyouxipianyi/doubaowork2api" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>
+        <button type="button" id="logoutButton">退出控制台</button>
+        <div class="runtime-line"><span class="status-dot"></span>API 服务运行中</div>
+      </div>
+    </aside>
+    <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
+    <div class="main-column">
+      <header class="topbar">
+        <div class="topbar-title">
+          <button type="button" id="menuButton" class="icon-button mobile-only" aria-label="打开导航">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+          </button>
+          <div><h1 id="pageTitle">总览</h1><p id="pageDescription">账号、请求和网关状态一屏看完。</p></div>
         </div>
-        <form id="loginForm" class="panel login-panel">
-          <div>
-            <span class="eyebrow">AUTHENTICATION</span>
-            <h2>进入控制台</h2>
-            <p class="muted">输入启动服务时配置的 <code>DOUBAO_WORK_API_KEY</code>。</p>
-          </div>
-          <label class="field">
-            <span>API Key</span>
-            <input id="loginKey" type="password" autocomplete="current-password" placeholder="sk-..." required>
-          </label>
-          <p id="loginError" class="form-error" role="alert" hidden></p>
-          <button class="button button-primary button-wide" type="submit">连接网关</button>
-        </form>
-      </section>
-
-      <section id="dashboardView" hidden>
-        <div class="hero-row">
-          <div>
-            <span class="eyebrow">GATEWAY OVERVIEW</span>
-            <h1>运行状态</h1>
-            <p id="lastUpdated" class="muted">等待首次同步</p>
-          </div>
-          <button id="refreshButton" class="button button-secondary" type="button">刷新数据</button>
+        <div class="topbar-actions">
+          <span class="version-pill" id="versionPill">v0.1.0</span>
+          <span class="connection-pill" id="connectionState"><span class="status-dot"></span>已连接</span>
+          <button type="button" id="autoRefreshButton" class="button ghost" aria-pressed="false">自动刷新 关</button>
+          <button type="button" id="themeButton" class="icon-button" aria-label="切换主题">
+            <svg viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z"/></svg>
+          </button>
         </div>
+      </header>
 
-        <div class="metric-grid">
-          <article class="metric-card metric-dark">
-            <span>账号总数</span>
-            <strong id="metricAccounts">0</strong>
-            <small>已导入账号</small>
-          </article>
-          <article class="metric-card">
-            <span>可接单</span>
-            <strong id="metricAvailable">0</strong>
-            <small>未禁用且未冷却</small>
-          </article>
-          <article class="metric-card">
-            <span>冷却中</span>
-            <strong id="metricCooling">0</strong>
-            <small>等待自动恢复</small>
-          </article>
-          <article class="metric-card metric-accent">
-            <span>成功请求</span>
-            <strong id="metricSuccess">0</strong>
-            <small>最近 100 条日志</small>
-          </article>
-        </div>
-
-        <div class="workspace-grid">
-          <section class="panel accounts-panel">
-            <div class="panel-heading">
-              <div>
-                <span class="eyebrow">ACCOUNT POOL</span>
-                <h2>账号池</h2>
-              </div>
-              <button id="openImportButton" class="button button-primary" type="button">导入账号</button>
-            </div>
-            <div id="accountList" class="account-list" aria-live="polite"></div>
-            <div id="accountEmpty" class="empty-state" hidden>
-              <strong>还没有账号</strong>
-              <p>导入账号 JSON 后即可开始接单。</p>
-              <button class="button button-secondary" type="button" data-action="open-import">导入第一个账号</button>
-            </div>
-          </section>
-
-          <aside class="side-stack">
-            <section class="panel api-panel">
-              <span class="eyebrow">CONNECTION</span>
-              <h2>接入信息</h2>
-              <dl class="detail-list">
-                <div>
-                  <dt>Base URL</dt>
-                  <dd><code id="baseUrl">/v1</code></dd>
-                </div>
-                <div>
-                  <dt>默认模型</dt>
-                  <dd><code id="defaultModel">deepseek-v4.1-flash</code></dd>
-                </div>
-                <div>
-                  <dt>鉴权</dt>
-                  <dd>Bearer / x-api-key</dd>
-                </div>
-              </dl>
-              <div class="key-hint">
-                <span>当前会话 Key</span>
-                <code id="maskedKey">sk-••••••••</code>
-              </div>
+      <main id="main">
+        <section id="page-overview" class="page active">
+          <div class="page-intro">
+            <div><span class="eyebrow">OVERVIEW</span><h2>运行状态</h2><p id="lastUpdated">等待首次同步</p></div>
+            <button type="button" class="button secondary" data-action="refresh">刷新数据</button>
+          </div>
+          <div class="metric-grid">
+            <article class="metric-card dark"><span>账号总数</span><strong id="metricAccounts">0</strong><small>已导入账号</small></article>
+            <article class="metric-card"><span>可接单</span><strong id="metricAvailable">0</strong><small>未禁用且未冷却</small></article>
+            <article class="metric-card"><span>冷却中</span><strong id="metricCooling">0</strong><small>等待自动恢复</small></article>
+            <article class="metric-card lime"><span>成功请求</span><strong id="metricSuccess">0</strong><small>当前日志窗口</small></article>
+          </div>
+          <div class="overview-grid">
+            <section class="panel">
+              <div class="panel-heading"><div><span class="eyebrow">TRAFFIC</span><h2>最近请求</h2></div><button class="text-button" data-tab-jump="logs">全部日志 →</button></div>
+              <div id="overviewLogs" class="mini-log-list"></div>
+              <div id="overviewLogsEmpty" class="empty-state" hidden><strong>还没有请求</strong><p>通过 API 或模型测试发起请求后，这里会出现记录。</p></div>
             </section>
-
-            <section class="panel test-panel">
-              <div class="panel-heading compact">
-                <div>
-                  <span class="eyebrow">SMOKE TEST</span>
-                  <h2>模型测试</h2>
+            <aside class="stack">
+              <section class="panel">
+                <div class="panel-heading compact"><div><span class="eyebrow">CONNECTION</span><h2>接入信息</h2></div><span class="badge ok">OpenAI v1</span></div>
+                <dl class="detail-list">
+                  <div><dt>Base URL</dt><dd><code id="baseUrl">/v1</code></dd></div>
+                  <div><dt>默认模型</dt><dd><code id="defaultModel">deepseek-v4.1-flash</code></dd></div>
+                  <div><dt>鉴权</dt><dd>Bearer / x-api-key</dd></div>
+                  <div><dt>当前 Key</dt><dd><code id="maskedKey">未配置</code></dd></div>
+                </dl>
+              </section>
+              <section class="panel test-panel">
+                <div class="panel-heading compact"><div><span class="eyebrow">SMOKE TEST</span><h2>模型测试</h2></div><span class="badge ok">实时上游</span></div>
+                <form id="chatForm">
+                  <label class="field"><span>模型</span><select id="chatModel"></select></label>
+                  <label class="field"><span>提示词</span><textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea></label>
+                  <label class="switch-row"><span><strong>流式返回</strong><small>观察 SSE 增量输出</small></span><input id="streamToggle" type="checkbox"></label>
+                  <button class="button primary wide" type="submit" id="chatSubmit">发送测试请求</button>
+                </form>
+                <div id="chatOutput" class="chat-output" hidden>
+                  <div class="chat-output-head"><span id="chatStatus">等待响应</span><span id="chatLatency"></span></div>
+                  <pre id="chatText"></pre>
                 </div>
-                <span class="tiny-badge">实时上游</span>
-              </div>
-              <form id="chatForm">
-                <label class="field">
-                  <span>提示词</span>
-                  <textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea>
-                </label>
-                <label class="switch-row">
-                  <span>
-                    <strong>流式返回</strong>
-                    <small>观察 SSE 增量输出</small>
-                  </span>
-                  <input id="streamToggle" type="checkbox">
-                </label>
-                <button id="chatSubmit" class="button button-primary button-wide" type="submit">发送测试请求</button>
-              </form>
-              <div id="chatOutput" class="chat-output" hidden>
-                <div class="chat-output-head">
-                  <span id="chatStatus">等待响应</span>
-                  <span id="chatLatency"></span>
-                </div>
-                <pre id="chatText"></pre>
-              </div>
-            </section>
-          </aside>
-        </div>
-
-        <section class="panel logs-panel">
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">REQUEST TRACE</span>
-              <h2>请求日志</h2>
-            </div>
-            <span class="muted small">仅记录元数据，不保存提示词与 Cookie</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>状态</th>
-                  <th>模型</th>
-                  <th>账号</th>
-                  <th>模式</th>
-                  <th>耗时</th>
-                  <th>错误</th>
-                </tr>
-              </thead>
-              <tbody id="logRows"></tbody>
-            </table>
-          </div>
-          <div id="logEmpty" class="empty-state compact" hidden>
-            <strong>暂无请求</strong>
-            <p>通过 API 或上方测试面板发起请求后会显示在这里。</p>
+              </section>
+            </aside>
           </div>
         </section>
-      </section>
-    </main>
+
+        <section id="page-gateway" class="page">
+          <div class="page-intro">
+            <div><span class="eyebrow">MODEL CATALOG</span><h2>网关模型清单</h2><p>对外模型名与豆包上游内部键分离；未知模型不会被静默改写。</p></div>
+            <button type="button" class="button secondary" data-action="refresh">刷新目录</button>
+          </div>
+          <div class="catalog-summary">
+            <div><b id="catalogCount">0</b><span>可用模型</span></div>
+            <div><b id="catalogDefault">—</b><span>默认模型</span></div>
+            <div><b>8</b><span>目录映射</span></div>
+            <div><b>0</b><span>媒体能力</span></div>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><span class="eyebrow">ROUTING TABLE</span><h2>模型与上游映射</h2></div><span class="muted small">/v1/models 同源</span></div>
+            <div class="table-wrap">
+              <table class="catalog-table"><thead><tr><th>状态</th><th>对外模型</th><th>显示名称</th><th>倍率</th><th>上游 model_item_key</th></tr></thead><tbody id="catalogRows"></tbody></table>
+            </div>
+          </section>
+        </section>
+
+        <section id="page-accounts" class="page">
+          <div class="page-intro">
+            <div><span class="eyebrow">ACCOUNT POOL</span><h2>账号池</h2><p>Cookie 只在本地保存，面板只显示设备标识摘要。</p></div>
+            <div class="button-row"><button type="button" class="button secondary" data-action="scan-desktop">扫描本机客户端</button><button type="button" class="button primary" data-action="open-import">导入账号</button></div>
+          </div>
+          <div class="metric-grid compact-grid">
+            <article class="metric-card"><span>账号</span><strong id="accountMetricTotal">0</strong><small>已载入</small></article>
+            <article class="metric-card"><span>可用</span><strong id="accountMetricReady">0</strong><small>可接单</small></article>
+            <article class="metric-card"><span>冷却</span><strong id="accountMetricCooling">0</strong><small>自动恢复</small></article>
+            <article class="metric-card"><span>停用</span><strong id="accountMetricDisabled">0</strong><small>不会接单</small></article>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><span class="muted small">凭证不下发浏览器</span></div>
+            <div id="accountList" class="account-list"></div>
+            <div id="accountEmpty" class="empty-state" hidden><strong>还没有账号</strong><p>扫描本机客户端或导入账号 JSON 后即可开始接单。</p></div>
+          </section>
+        </section>
+
+        <section id="page-analytics" class="page">
+          <div class="page-intro">
+            <div><span class="eyebrow">USAGE</span><h2>用量与稳定性</h2><p>基于当前进程内的请求元数据聚合，不保存提示词和响应正文。</p></div>
+            <div class="segmented" id="analyticsRange"><button class="active" data-range="all">全部</button><button data-range="success">成功</button><button data-range="error">失败</button></div>
+          </div>
+          <div class="metric-grid">
+            <article class="metric-card dark"><span>请求数</span><strong id="analyticsRequests">0</strong><small>当前窗口</small></article>
+            <article class="metric-card"><span>成功率</span><strong id="analyticsSuccessRate">—</strong><small>完成请求</small></article>
+            <article class="metric-card"><span>平均耗时</span><strong id="analyticsLatency">—</strong><small>端到端</small></article>
+            <article class="metric-card lime"><span>流式占比</span><strong id="analyticsStreamShare">—</strong><small>流式请求</small></article>
+          </div>
+          <div class="analytics-grid">
+            <section class="panel">
+              <div class="panel-heading"><div><span class="eyebrow">BY MODEL</span><h2>模型分布</h2></div></div>
+              <div id="modelDistribution" class="distribution"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading"><div><span class="eyebrow">RECENT</span><h2>耗时趋势</h2></div></div>
+              <div id="latencyChart" class="latency-chart"></div>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><span class="eyebrow">BREAKDOWN</span><h2>按模型统计</h2></div></div>
+            <div class="table-wrap"><table><thead><tr><th>模型</th><th>请求</th><th>成功</th><th>失败</th><th>平均耗时</th></tr></thead><tbody id="analyticsRows"></tbody></table></div>
+          </section>
+        </section>
+
+        <section id="page-settings" class="page">
+          <div class="page-intro">
+            <div><span class="eyebrow">SETTINGS</span><h2>设置与运行信息</h2><p>0.1.0 采用环境变量配置；此页只读展示，修改后重启网关生效。</p></div>
+            <button type="button" class="button secondary" data-action="refresh">重新读取</button>
+          </div>
+          <div class="settings-layout">
+            <section class="panel settings-panel">
+              <div class="panel-heading"><div><span class="eyebrow">RUNTIME</span><h2>运行配置</h2></div><span class="badge ok">只读</span></div>
+              <dl class="settings-list">
+                <div><dt>监听地址</dt><dd><code id="settingListen">—</code></dd></div>
+                <div><dt>上游地址</dt><dd><code id="settingUpstream">—</code></dd></div>
+                <div><dt>默认模型</dt><dd><code id="settingDefaultModel">—</code></dd></div>
+                <div><dt>请求超时</dt><dd id="settingTimeout">—</dd></div>
+                <div><dt>故障冷却</dt><dd id="settingCooldown">—</dd></div>
+                <div><dt>账号目录</dt><dd><code id="settingAccountsDir">—</code></dd></div>
+              </dl>
+            </section>
+            <section class="panel settings-panel">
+              <div class="panel-heading"><div><span class="eyebrow">SECURITY</span><h2>安全边界</h2></div></div>
+              <div class="security-note">
+                <strong>凭证只写入本机 <code>accounts/</code></strong>
+                <p>控制台不返回 Cookie，浏览器也拿不到账号凭证。公网部署请使用 TLS、访问控制和反向代理，不要直接暴露本服务。</p>
+              </div>
+              <div class="settings-actions"><button type="button" class="button secondary" data-action="logout">退出当前会话</button><a class="button secondary" href="/docs" target="_blank" rel="noopener noreferrer">OpenAPI 文档</a></div>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><span class="eyebrow">ENVIRONMENT</span><h2>可用环境变量</h2></div></div>
+            <div class="env-grid">
+              <code>DOUBAO_WORK_API_KEY</code><span>网关访问密钥</span>
+              <code>DOUBAO_WORK_ACCOUNTS_DIR</code><span>账号 JSON 目录</span>
+              <code>DOUBAO_WORK_DEFAULT_MODEL</code><span>默认模型</span>
+              <code>DOUBAO_WORK_TIMEOUT</code><span>上游超时秒数</span>
+              <code>DOUBAO_WORK_COOLDOWN_SECONDS</code><span>故障冷却秒数</span>
+            </div>
+          </section>
+        </section>
+
+        <section id="page-logs" class="page">
+          <div class="page-intro">
+            <div><span class="eyebrow">REQUEST TRACE</span><h2>请求日志</h2><p>仅记录时间、模型、账号、状态与耗时，不记录提示词、响应正文和 Cookie。</p></div>
+            <div class="button-row"><input id="logSearch" class="search-input" type="search" placeholder="搜索模型 / 账号 / 错误"><button type="button" class="button secondary" data-action="refresh">刷新</button></div>
+          </div>
+          <section class="panel logs-panel">
+            <div class="panel-heading"><div><span class="eyebrow">LIVE WINDOW</span><h2>最近 200 条</h2></div><span class="badge" id="logCountBadge">0 条</span></div>
+            <div class="table-wrap"><table><thead><tr><th>时间</th><th>状态</th><th>模型</th><th>账号</th><th>模式</th><th>耗时</th><th>错误</th></tr></thead><tbody id="logRows"></tbody></table></div>
+            <div id="logEmpty" class="empty-state" hidden><strong>暂无请求</strong><p>通过 API 或模型测试发起请求后会显示在这里。</p></div>
+          </section>
+        </section>
+      </main>
+    </div>
   </div>
+
+  <nav id="mobileNav" class="mobile-nav" aria-label="手机导航">
+    <button class="mobile-nav-item active" data-tab="overview"><span>总览</span></button>
+    <button class="mobile-nav-item" data-tab="gateway"><span>网关</span></button>
+    <button class="mobile-nav-item" data-tab="accounts"><span>账号</span></button>
+    <button class="mobile-nav-item" data-tab="analytics"><span>用量</span></button>
+    <button class="mobile-nav-item" data-tab="settings"><span>设置</span></button>
+  </nav>
 
   <dialog id="importDialog" class="dialog">
     <form id="importForm" method="dialog">
-      <div class="dialog-heading">
-        <div>
-          <span class="eyebrow">ACCOUNT INGEST</span>
-          <h2>导入账号</h2>
-        </div>
-        <button class="icon-button" type="button" data-action="close-import" aria-label="关闭">×</button>
-      </div>
-      <p class="muted">粘贴单个账号 JSON 对象，或账号数组。内容只在本地解析并写入 <code>accounts/</code>。</p>
-      <label class="field">
-        <span>账号 JSON</span>
-        <textarea id="importJson" rows="14" spellcheck="false" placeholder='{"id":"account-1","device_id":"...","web_id":"...","cookies":{"sessionid":"..."}}'></textarea>
-      </label>
-      <label class="field file-field">
-        <span>或从 JSON 文件导入（可多选）</span>
-        <input id="importFiles" type="file" accept=".json,application/json" multiple>
-      </label>
+      <div class="dialog-heading"><div><span class="eyebrow">ACCOUNT INGEST</span><h2>导入账号</h2></div><button type="button" class="icon-button" data-action="close-import" aria-label="关闭">×</button></div>
+      <p class="muted">粘贴单个账号 JSON、账号数组，或选择多个 JSON 文件。内容只在本地解析并写入 <code>accounts/</code>。</p>
+      <label class="field"><span>账号 JSON</span><textarea id="importJson" rows="12" spellcheck="false" placeholder='{"id":"account-1","device_id":"...","web_id":"...","cookies":{"sessionid":"..."}}'></textarea></label>
+      <label class="field file-field"><span>或从 JSON 文件导入（可多选）</span><input id="importFiles" type="file" accept=".json,application/json" multiple></label>
       <p id="importError" class="form-error" role="alert" hidden></p>
-      <div class="dialog-actions">
-        <button class="button button-quiet" type="button" data-action="close-import">取消</button>
-        <button class="button button-primary" type="submit">导入并保存</button>
-      </div>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-action="close-import">取消</button><button type="submit" class="button primary">导入并保存</button></div>
     </form>
   </dialog>
 

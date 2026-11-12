@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DOUBAO_WORK_PORT=18789
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md CHANGELOG.md ./
 COPY doubao_work2api ./doubao_work2api
 RUN pip install --no-cache-dir .
 

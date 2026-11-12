@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .catalog import normalize_model
+
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -29,12 +31,7 @@ class ChatCompletionRequest(BaseModel):
 
     @property
     def normalized_model(self) -> str:
-        aliases = {
-            "deepseek-v4-1-flash": "deepseek-v4.1-flash",
-            "deepseek-v4.1-flash-261017": "deepseek-v4.1-flash",
-            "person-deepseek-v4-1-flash-261017": "deepseek-v4.1-flash",
-        }
-        return aliases.get(self.model.lower(), self.model)
+        return normalize_model(self.model)
 
 
 class ModelCard(BaseModel):

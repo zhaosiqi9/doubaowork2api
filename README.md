@@ -1,8 +1,11 @@
 # DoubaoWork2API
 
-把豆包工作电脑版的 DeepSeek 模型直接转换为 OpenAI 兼容 API。服务端只保存
-用户自行导入的账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包
-上游，不需要运行 DoubaoWork、浏览器、CDP 或 Windows 桌面。
+把豆包工作电脑版的模型转换为 OpenAI 兼容 API。服务端只保存用户自行导入的
+账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包上游，不需要持续
+运行 DoubaoWork、浏览器、CDP 或 Windows 桌面。
+
+当前版本：`0.1.0`。这是文本 Chat Completions 的首个公开版本，不包含图片、
+视频或其他媒体接口。
 
 ## MVP 功能
 
@@ -13,7 +16,26 @@
 - `Authorization: Bearer <key>` / `x-api-key` 鉴权
 - 多账号轮换；401/403 禁用账号，429/5xx 临时冷却
 - 账号文件只从本地 `accounts/` 读取
-- 同源轻量 WebUI：账号导入/启停、冷却状态、模型测试、请求日志
+- 同源新版 WebUI：总览、网关、账号、用量、设置、日志
+- 模型目录与豆包上游 `model_item_key` 分离映射
+
+## 模型目录
+
+`/v1/models` 当前列出以下 8 个模型。对外名称与上游内部键分开，请求某个模型
+时会使用对应上游键，不会把未知模型静默改走默认 DeepSeek。
+
+| 对外模型 | 显示名称 | 倍率 |
+| --- | --- | --- |
+| `deepseek-v4.1-flash` | DeepSeek V4.1 Flash | 0.01x |
+| `seed-lite-7b` | 豆包 2.1 Lite | 免费 |
+| `person-kimi-k3-1-pro-261111` | Kimi K3.1 Pro | 0.95x |
+| `person-kimi-k3-1-pro-highspeed-261111` | Kimi K3.1 Pro 高速 | 1.44x |
+| `person-kimi-k3-261111` | Kimi K3 | 1.48x |
+| `person-glm-5-3-261111` | GLM 5.3 | 0.80x |
+| `person-glm-5-3-flash-261111` | GLM 5.3 Flash | 0.08x |
+| `person-deepseek-v4-pro-ga-260813` | DeepSeek V4 Pro | 0.46x |
+
+模型可用性仍取决于当前账号、地区和豆包上游状态。目录展示不等于承诺无限额度。
 
 ## 账号格式
 
@@ -39,7 +61,28 @@
 账号目录默认是 `accounts/`，已被 `.gitignore` 排除。不要把账号文件提交到
 GitHub，也不要贴到聊天中。
 
-如果本机已有登录中的 DoubaoWork，可以通过 CDP 导出一个账号：
+如果本机已有登录中的 DoubaoWork，可以直接在控制台点「扫描本机客户端」：
+
+桌面扫描是可选能力，需要额外安装：
+
+```powershell
+python -m pip install -e ".[desktop]"
+```
+
+1. 关闭已经运行的 DoubaoWork。
+2. 用调试端口启动并登录客户端：
+
+```powershell
+& "$env:LOCALAPPDATA\DoubaoWork\Application\app\DoubaoWork.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir="$env:LOCALAPPDATA\DoubaoWork\User Data"
+```
+
+3. 回到控制台点「扫描本机客户端」。网关只读取本机
+   `127.0.0.1:9222` 的当前登录态，读取 Cookie、`device_id` 和 `web_id`
+   后写入本地 `accounts/`，不会上传到第三方。
+
+也可以直接通过脚本导出：
 
 ```powershell
 python scripts/export_desktop_account.py `
@@ -47,8 +90,8 @@ python scripts/export_desktop_account.py `
   --output accounts/account-1.json
 ```
 
-CDP 必须只监听 `127.0.0.1`。导出完成后就可以关闭 DoubaoWork；本项目运行时
-不再需要它。
+CDP 必须只监听 `127.0.0.1`。扫描或导出完成后就可以关闭 DoubaoWork；
+本项目运行时不再需要它。
 
 ## 启动
 
@@ -74,7 +117,9 @@ DOUBAO_WORK_HOST=0.0.0.0 DOUBAO_WORK_API_KEY='sk-your-key' python3 -m doubao_wor
 - 粘贴单个/多个账号 JSON，或一次选择多个 JSON 文件导入
 - 账号启用、停用、解除冷却
 - 查看设备标识摘要、冷却剩余时间和最近错误
+- 查看模型目录与上游映射
 - 直接发起普通或流式模型测试
+- 查看请求成功率、耗时、模型分布和日志
 - 查看最近 200 条请求的元数据日志（不保存提示词、响应正文和 Cookie）
 
 Docker：
@@ -134,6 +179,12 @@ SSE 流。正式版本仍会继续用完整新请求体验证最终文本和 Lin
 
 这次测试是在 Windows 上用外部 `httpx` 客户端直连豆包上游完成，不经过
 DoubaoWork 页面；Linux 服务器仍需在目标网络做一次最终回归。
+
+0.1.0 发布前的补充实测：
+
+- `deepseek-v4.1-flash` 经本网关返回 `UI_SMOKE_OK`
+- `seed-lite-7b` 经本网关返回 `SEED_SMOKE_OK`
+- 两条请求均由同一个已启用账号完成，并写入正确模型名的请求日志
 
 ## 安全与限制
 

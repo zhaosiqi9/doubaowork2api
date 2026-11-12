@@ -13,7 +13,9 @@ from pydantic import BaseModel
 
 from . import __version__
 from .accounts import AccountPool
+from .catalog import MODEL_CATALOG
 from .config import Settings
+from .desktop import DesktopScanError, scan_desktop_account
 from .errors import AuthenticationError, GatewayError
 from .logs import RequestLog
 from .models import ChatCompletionRequest, ModelCard, ModelList
@@ -22,7 +24,7 @@ from .transport import DirectTransport
 
 logger = logging.getLogger(__name__)
 
-MODEL_IDS = ["deepseek-v4.1-flash"]
+MODEL_IDS = [item.id for item in MODEL_CATALOG]
 WEB_DIR = Path(__file__).parent / "web"
 
 
@@ -37,6 +39,10 @@ class AccountImportRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     api_key: str = ""
+
+
+class DesktopScanRequest(BaseModel):
+    cdp_url: str = "http://127.0.0.1:9222"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -130,7 +136,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/v1/models", dependencies=[Depends(require_auth)])
     async def models() -> ModelList:
-        return ModelList(data=[ModelCard(id=item) for item in MODEL_IDS])
+        return ModelList(
+            data=[
+                ModelCard(id=item.id, owned_by="doubao-work")
+                for item in MODEL_CATALOG
+            ]
+        )
 
     @app.post(
         "/v1/chat/completions",
@@ -159,10 +170,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/admin/config", dependencies=[Depends(require_auth)])
     async def admin_config() -> dict[str, Any]:
         return {
-            "models": MODEL_IDS,
+            "version": __version__,
+            "models": [item.public_dict() for item in MODEL_CATALOG],
             "default_model": settings.default_model,
             "api_key_configured": bool(settings.api_key),
             "accounts_dir": str(settings.accounts_dir),
+            "upstream": settings.upstream_base,
+            "timeout_seconds": settings.request_timeout_seconds,
+            "cooldown_seconds": settings.cooldown_seconds,
+            "listen": f"{settings.host}:{settings.port}",
+        }
+
+    @app.post(
+        "/admin/accounts/scan-desktop",
+        dependencies=[Depends(require_auth)],
+    )
+    async def scan_desktop(
+        payload: DesktopScanRequest | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = await scan_desktop_account(
+                pool,
+                cdp_url=(payload.cdp_url if payload else "http://127.0.0.1:9222"),
+            )
+        except DesktopScanError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {
+            "created": result.created,
+            "cookie_count": result.cookie_count,
+            "account": result.account.public_dict(),
         }
 
     @app.post("/admin/login")

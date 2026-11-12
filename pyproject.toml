@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+desktop = [
+  "playwright>=1.49",
+]
 dev = [
   "pytest>=8.3",
   "pytest-asyncio>=0.24",

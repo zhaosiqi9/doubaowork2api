@@ -131,3 +131,49 @@ async def test_service_does_not_retry_after_partial_output(
     with pytest.raises(UpstreamError, match="connection dropped"):
         await service.complete(request)
     assert transport.calls == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_service_uses_requested_model_upstream_key(
+    tmp_path: Path,
+) -> None:
+    class PayloadTransport(FakeTransport):
+        payloads: list[dict] = []
+
+        async def stream(
+            self, account: Account, payload: dict
+        ) -> AsyncIterator[dict]:
+            self.payloads.append(payload)
+            yield {
+                "_event": "STREAM_CHUNK",
+                "patch_op": [
+                    {
+                        "patch_value": {
+                            "content_block": [
+                                {
+                                    "block_type": 10000,
+                                    "content": {"text_block": {"text": "OK"}},
+                                }
+                            ]
+                        }
+                    }
+                ],
+            }
+
+    transport = PayloadTransport([])
+    pool = make_pool(tmp_path)
+    service = ChatService(
+        pool,
+        transport,  # type: ignore[arg-type]
+        model_key="person-deepseek-v4-1-flash-261017",
+        app_id="app",
+        workspace_root=tmp_path,
+    )
+    request = ChatCompletionRequest(
+        model="person-kimi-k3-1-pro-261111",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    await service.complete(request)
+    assert transport.payloads[0]["option"]["model_config"][
+        "model_item_key"
+    ] == "person-kimi-k3-1-pro-261111"

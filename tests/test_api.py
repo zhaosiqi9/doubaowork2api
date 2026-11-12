@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from doubao_work2api import app as app_module
 from doubao_work2api.app import create_app
 from doubao_work2api.config import Settings
+from doubao_work2api.desktop import DesktopScanResult
 
 
 def settings(tmp_path, *, api_key: str = "") -> Settings:
@@ -25,9 +27,11 @@ def test_health_and_models(tmp_path) -> None:
         )
     assert denied.status_code == 401
     assert allowed.status_code == 200
-    assert [item["id"] for item in allowed.json()["data"]] == [
-        "deepseek-v4.1-flash"
-    ]
+    model_ids = [item["id"] for item in allowed.json()["data"]]
+    assert model_ids[0] == "deepseek-v4.1-flash"
+    assert "person-kimi-k3-1-pro-261111" in model_ids
+    assert "person-glm-5-3-flash-261111" in model_ids
+    assert len(model_ids) == 8
 
 
 def test_chat_without_account_returns_clear_error(tmp_path) -> None:
@@ -72,6 +76,28 @@ def test_web_ui_and_assets_are_served(tmp_path) -> None:
     assert css.status_code == 200
     assert script.status_code == 200
     assert "Content-Security-Policy" in index.headers
+    assert 'id="page-overview"' in index.text
+    assert 'id="page-gateway"' in index.text
+    assert 'id="page-accounts"' in index.text
+    assert 'id="page-analytics"' in index.text
+    assert 'id="page-settings"' in index.text
+    assert 'id="page-logs"' in index.text
+
+
+def test_admin_config_exposes_catalog_and_runtime(tmp_path) -> None:
+    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+        response = client.get(
+            "/admin/config",
+            headers={"Authorization": "Bearer secret"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == "0.1.0"
+    assert len(body["models"]) == 8
+    assert body["models"][0]["upstream_key"] == (
+        "person-deepseek-v4-1-flash-261017"
+    )
+    assert body["listen"] == "127.0.0.1:18789"
 
 
 def test_import_toggle_and_clear_cooldown(tmp_path) -> None:
@@ -163,3 +189,37 @@ def test_admin_login_checks_key(tmp_path) -> None:
     assert denied.status_code == 401
     assert allowed.status_code == 200
     assert allowed.json()["ok"] is True
+
+
+def test_scan_desktop_imports_account_without_exposing_cookie(
+    tmp_path, monkeypatch
+) -> None:
+    async def fake_scan(pool, *, cdp_url):
+        account = await pool.upsert(
+            {
+                "id": "desktop-scan",
+                "device_id": "device-scan",
+                "web_id": "web-scan",
+                "cookies": {"sessionid": "secret-cookie"},
+            }
+        )
+        return DesktopScanResult(
+            account=account,
+            created=True,
+            cookie_count=1,
+        )
+
+    monkeypatch.setattr(app_module, "scan_desktop_account", fake_scan)
+    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+        response = client.post(
+            "/admin/accounts/scan-desktop",
+            headers={"Authorization": "Bearer secret"},
+            json={"cdp_url": "http://127.0.0.1:9222"},
+        )
+    assert response.status_code == 200
+    assert response.json()["account"]["id"] == "desktop-scan"
+    assert "secret-cookie" not in response.text
+    saved = (tmp_path / "accounts" / "desktop-scan.json").read_text(
+        encoding="utf-8"
+    )
+    assert "secret-cookie" in saved
