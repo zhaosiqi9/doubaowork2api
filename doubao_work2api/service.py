@@ -16,6 +16,7 @@ from .errors import (
     UpstreamError,
     UpstreamRateLimitError,
 )
+from .logs import RequestLog, RequestLogEntry
 from .models import ChatCompletionRequest
 from .protocol import (
     chunk_payload,
@@ -39,6 +40,7 @@ class ChatService:
         app_id: str,
         workspace_root: Path,
         default_model: str = "deepseek-v4.1-flash",
+        request_log: RequestLog | None = None,
     ) -> None:
         self.pool = pool
         self.transport = transport
@@ -46,59 +48,83 @@ class ChatService:
         self.app_id = app_id
         self.workspace_root = workspace_root
         self.default_model = default_model
+        self.request_log = request_log
 
     async def complete(self, request: ChatCompletionRequest) -> dict[str, Any]:
+        log_entry = self._start_log(request)
         content: list[str] = []
         reasoning: list[str] = []
-        async for kind, text in self._fragments_with_retry(request):
-            if kind == "content":
-                content.append(text)
-            else:
-                reasoning.append(text)
-        answer = "".join(content)
-        if not answer:
-            raise UpstreamError("Doubao returned an empty response.")
-        prompt_text = "".join(
-            str(message.content or "") for message in request.messages
-        )
-        return completion_payload(
-            request_id=completion_id(),
-            model=request.normalized_model,
-            content=answer,
-            reasoning="".join(reasoning),
-            prompt_tokens=max(1, len(prompt_text) // 3),
-            completion_tokens=max(1, len(answer) // 3),
-        )
+        try:
+            async for kind, text in self._fragments_with_retry(
+                request, log_entry
+            ):
+                if kind == "content":
+                    content.append(text)
+                else:
+                    reasoning.append(text)
+            answer = "".join(content)
+            if not answer:
+                raise UpstreamError("Doubao returned an empty response.")
+            prompt_text = "".join(
+                str(message.content or "") for message in request.messages
+            )
+            result = completion_payload(
+                request_id=completion_id(),
+                model=request.normalized_model,
+                content=answer,
+                reasoning="".join(reasoning),
+                prompt_tokens=max(1, len(prompt_text) // 3),
+                completion_tokens=max(1, len(answer) // 3),
+            )
+            self._log_success(log_entry)
+            return result
+        except Exception as exc:
+            self._log_failure(log_entry, str(exc))
+            raise
+        finally:
+            self._log_interrupted(log_entry)
 
     async def stream(self, request: ChatCompletionRequest) -> AsyncIterator[str]:
+        log_entry = self._start_log(request)
         request_id = completion_id()
-        yield sse_data(
-            chunk_payload(
-                request_id=request_id,
-                model=request.normalized_model,
-                role="assistant",
-            )
-        )
-        async for kind, text in self._fragments_with_retry(request):
-            field = "content" if kind == "content" else "reasoning"
+        try:
             yield sse_data(
                 chunk_payload(
                     request_id=request_id,
                     model=request.normalized_model,
-                    **{field: text},
+                    role="assistant",
                 )
             )
-        yield sse_data(
-            chunk_payload(
-                request_id=request_id,
-                model=request.normalized_model,
-                finish_reason="stop",
+            async for kind, text in self._fragments_with_retry(
+                request, log_entry
+            ):
+                field = "content" if kind == "content" else "reasoning"
+                yield sse_data(
+                    chunk_payload(
+                        request_id=request_id,
+                        model=request.normalized_model,
+                        **{field: text},
+                    )
+                )
+            yield sse_data(
+                chunk_payload(
+                    request_id=request_id,
+                    model=request.normalized_model,
+                    finish_reason="stop",
+                )
             )
-        )
-        yield "data: [DONE]\n\n"
+            yield "data: [DONE]\n\n"
+            self._log_success(log_entry)
+        except Exception as exc:
+            self._log_failure(log_entry, str(exc))
+            raise
+        finally:
+            self._log_interrupted(log_entry)
 
     async def _fragments_with_retry(
-        self, request: ChatCompletionRequest
+        self,
+        request: ChatCompletionRequest,
+        log_entry: RequestLogEntry | None,
     ) -> AsyncIterator[tuple[str, str]]:
         attempted: set[str] = set()
         last_error: Exception | None = None
@@ -113,6 +139,8 @@ class ChatService:
                 await self.pool.release(account)
                 break
             attempted.add(account.id)
+            if self.request_log is not None and log_entry is not None:
+                self.request_log.account(log_entry, account.id)
             emitted = False
             try:
                 async for fragment in self._fragments(account, request):
@@ -127,14 +155,20 @@ class ChatService:
             except UpstreamAuthError as exc:
                 if emitted:
                     raise
-                account.enabled = False
-                account.last_error = exc.message
+                try:
+                    await self.pool.set_enabled(account.id, False)
+                except Exception:
+                    account.enabled = False
+                    account.last_error = exc.message
                 last_error = exc
             except UpstreamChallengeError as exc:
                 if emitted:
                     raise
-                account.enabled = False
-                account.last_error = exc.message
+                try:
+                    await self.pool.set_enabled(account.id, False)
+                except Exception:
+                    account.enabled = False
+                    account.last_error = exc.message
                 last_error = exc
             except UpstreamRateLimitError as exc:
                 if emitted:
@@ -191,3 +225,32 @@ class ChatService:
         )
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace
+
+    def _start_log(
+        self, request: ChatCompletionRequest
+    ) -> RequestLogEntry | None:
+        if self.request_log is None:
+            return None
+        return self.request_log.start(
+            model=request.normalized_model,
+            stream=request.stream,
+            meta={"messages": len(request.messages)},
+        )
+
+    def _log_success(self, entry: RequestLogEntry | None) -> None:
+        if self.request_log is not None and entry is not None:
+            self.request_log.success(entry)
+
+    def _log_failure(
+        self, entry: RequestLogEntry | None, error: str
+    ) -> None:
+        if self.request_log is not None and entry is not None:
+            self.request_log.failure(entry, error)
+
+    def _log_interrupted(self, entry: RequestLogEntry | None) -> None:
+        if (
+            self.request_log is not None
+            and entry is not None
+            and entry.status == "running"
+        ):
+            self.request_log.failure(entry, "request ended before completion")

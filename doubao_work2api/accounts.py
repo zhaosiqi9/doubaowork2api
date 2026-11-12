@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +26,7 @@ class Account:
     cooldown_until: float = 0.0
     last_error: str = ""
     in_flight: int = 0
+    source_path: Path | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
@@ -40,15 +43,34 @@ class Account:
 
     def public_dict(self) -> dict[str, Any]:
         remaining = max(0, int(self.cooldown_until - time.time()))
+        if not self.enabled:
+            state = "disabled"
+        elif remaining:
+            state = "cooling"
+        elif self.in_flight:
+            state = "busy"
+        else:
+            state = "ready"
         return {
             "id": self.id,
             "enabled": self.enabled,
             "available": self.available,
+            "state": state,
             "cooldown_remaining_seconds": remaining,
             "last_error": self.last_error,
             "device_id": self.device_id[:6] + "..." if self.device_id else "",
             "web_id": self.web_id[:6] + "..." if self.web_id else "",
             "in_flight": self.in_flight,
+        }
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "device_id": self.device_id,
+            "web_id": self.web_id,
+            "device_name": self.device_name,
+            "enabled": self.enabled,
+            "cookies": dict(self.cookies),
         }
 
 
@@ -77,6 +99,16 @@ def _cookie_dict(value: Any) -> dict[str, str]:
                 result[name] = str(cookie_value)
         return result
     return {}
+
+
+def _as_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
 
 
 def parse_account_document(document: Any) -> Account:
@@ -115,7 +147,10 @@ def parse_account_document(document: Any) -> Account:
     if not cookies:
         raise ValueError("account has no cookies")
     if not account_id:
-        account_id = f"account-{abs(hash(tuple(cookies))) % 10**8:08d}"
+        digest = hashlib.sha256(
+            json.dumps(cookies, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        account_id = f"account-{digest[:8]}"
     return Account(
         id=account_id,
         cookies=cookies,
@@ -124,7 +159,7 @@ def parse_account_document(document: Any) -> Account:
         device_name=str(
             document.get("device_name") or "DOUBAO-LINUX"
         ).strip(),
-        enabled=bool(document.get("enabled", True)),
+        enabled=_as_bool(document.get("enabled"), True),
     )
 
 
@@ -153,6 +188,7 @@ class AccountPool:
             try:
                 document = json.loads(path.read_text(encoding="utf-8"))
                 account = parse_account_document(document)
+                account.source_path = path
             except Exception as exc:
                 logger.warning("Skipping account file %s: %s", path.name, exc)
                 continue
@@ -165,6 +201,12 @@ class AccountPool:
         self._index = 0
         logger.info("Loaded %d Doubao account(s)", len(loaded))
         return len(loaded)
+
+    def find(self, account_id: str) -> Account | None:
+        return next(
+            (account for account in self._accounts if account.id == account_id),
+            None,
+        )
 
     async def acquire(self) -> Account:
         async with self._lock:
@@ -211,5 +253,84 @@ class AccountPool:
     def mark_success(self, account: Account) -> None:
         account.clear_error()
 
+    async def upsert(self, document: Any) -> Account:
+        incoming = parse_account_document(document)
+        async with self._lock:
+            existing = self.find(incoming.id)
+            if existing is None:
+                existing = incoming
+                existing.source_path = self._account_path(existing.id)
+                self._accounts.append(existing)
+            else:
+                existing.cookies = incoming.cookies
+                existing.device_id = incoming.device_id
+                existing.web_id = incoming.web_id
+                existing.device_name = incoming.device_name
+                existing.enabled = incoming.enabled
+                existing.cooldown_until = 0.0
+                existing.last_error = ""
+            if existing.source_path is None:
+                existing.source_path = self._account_path(existing.id)
+            self._write(existing)
+            return existing
+
+    async def set_enabled(self, account_id: str, enabled: bool) -> Account:
+        async with self._lock:
+            account = self.find(account_id)
+            if account is None:
+                raise KeyError(account_id)
+            previous = account.enabled
+            account.enabled = enabled
+            if not enabled:
+                account.cooldown_until = 0.0
+            try:
+                if account.source_path is None:
+                    account.source_path = self._account_path(account.id)
+                self._write(account)
+            except Exception:
+                account.enabled = previous
+                raise
+            return account
+
+    async def clear_cooldown(self, account_id: str) -> Account:
+        async with self._lock:
+            account = self.find(account_id)
+            if account is None:
+                raise KeyError(account_id)
+            account.cooldown_until = 0.0
+            account.last_error = ""
+            return account
+
     def snapshot(self) -> list[dict[str, Any]]:
         return [account.public_dict() for account in self._accounts]
+
+    def _account_path(self, account_id: str) -> Path:
+        safe = "".join(
+            character
+            for character in account_id
+            if character.isalnum() or character in {"-", "_"}
+        )[:60]
+        if not safe:
+            safe = "account-" + hashlib.sha256(
+                account_id.encode("utf-8")
+            ).hexdigest()[:8]
+        return self.accounts_dir / f"{safe}.json"
+
+    def _write(self, account: Account) -> None:
+        assert account.source_path is not None
+        path = account.source_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            account.to_document(),
+            ensure_ascii=False,
+            indent=2,
+        )
+        try:
+            path.write_text(payload, encoding="utf-8")
+        except PermissionError:
+            # Windows sandbox can reject replace() across some mapped paths.
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(payload, encoding="utf-8")
+            os.replace(temporary, path)
+        if os.name != "nt":
+            path.chmod(0o600)

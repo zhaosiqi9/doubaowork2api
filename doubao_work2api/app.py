@@ -3,15 +3,19 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import __version__
 from .accounts import AccountPool
 from .config import Settings
 from .errors import AuthenticationError, GatewayError
+from .logs import RequestLog
 from .models import ChatCompletionRequest, ModelCard, ModelList
 from .service import ChatService
 from .transport import DirectTransport
@@ -19,6 +23,20 @@ from .transport import DirectTransport
 logger = logging.getLogger(__name__)
 
 MODEL_IDS = ["deepseek-v4.1-flash"]
+WEB_DIR = Path(__file__).parent / "web"
+
+
+class AccountEnabledRequest(BaseModel):
+    enabled: bool
+
+
+class AccountImportRequest(BaseModel):
+    account: dict[str, Any] | list[dict[str, Any]] | None = None
+    accounts: list[dict[str, Any]] | None = None
+
+
+class LoginRequest(BaseModel):
+    api_key: str = ""
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -29,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     pool.load()
     transport = DirectTransport(settings)
+    request_log = RequestLog()
     service = ChatService(
         pool,
         transport,
@@ -36,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app_id=settings.app_id,
         workspace_root=settings.data_dir / "workspaces",
         default_model=settings.default_model,
+        request_log=request_log,
     )
 
     @asynccontextmanager
@@ -53,6 +73,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.pool = pool
     app.state.service = service
+    app.state.request_log = request_log
+    app.mount("/ui-assets", StaticFiles(directory=WEB_DIR), name="ui-assets")
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.url.path == "/" or request.url.path.startswith("/ui-assets/"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; img-src 'self' data:; "
+                "style-src 'self'; script-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            )
+        return response
 
     async def require_auth(
         authorization: str | None = Header(default=None),
@@ -115,5 +151,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/admin/accounts", dependencies=[Depends(require_auth)])
     async def admin_accounts() -> dict[str, Any]:
         return {"data": pool.snapshot()}
+
+    @app.get("/admin/logs", dependencies=[Depends(require_auth)])
+    async def admin_logs(limit: int = 100) -> dict[str, Any]:
+        return {"data": request_log.snapshot(limit)}
+
+    @app.get("/admin/config", dependencies=[Depends(require_auth)])
+    async def admin_config() -> dict[str, Any]:
+        return {
+            "models": MODEL_IDS,
+            "default_model": settings.default_model,
+            "api_key_configured": bool(settings.api_key),
+            "accounts_dir": str(settings.accounts_dir),
+        }
+
+    @app.post("/admin/login")
+    async def admin_login(payload: LoginRequest) -> dict[str, Any]:
+        if settings.api_key and payload.api_key != settings.api_key:
+            raise AuthenticationError("Invalid API key.")
+        return {"ok": True}
+
+    @app.post(
+        "/admin/accounts/import",
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_accounts(payload: AccountImportRequest) -> dict[str, Any]:
+        if payload.accounts is not None:
+            documents = payload.accounts
+        elif isinstance(payload.account, list):
+            documents = payload.account
+        elif payload.account is not None:
+            documents = [payload.account]
+        else:
+            documents = []
+        if not documents:
+            raise HTTPException(status_code=400, detail="No accounts supplied.")
+        imported: list[str] = []
+        errors: list[str] = []
+        for index, document in enumerate(documents, start=1):
+            try:
+                account = await pool.upsert(document)
+                imported.append(account.id)
+            except Exception as exc:
+                logger.exception("Account import failed for entry %s", index)
+                errors.append(f"account {index}: {exc}")
+        return {"imported": imported, "errors": errors}
+
+    @app.patch(
+        "/admin/accounts/{account_id}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_account_enabled(
+        account_id: str, payload: AccountEnabledRequest
+    ) -> dict[str, Any]:
+        try:
+            account = await pool.set_enabled(account_id, payload.enabled)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        return {"data": account.public_dict()}
+
+    @app.post(
+        "/admin/accounts/{account_id}/clear-cooldown",
+        dependencies=[Depends(require_auth)],
+    )
+    async def clear_account_cooldown(account_id: str) -> dict[str, Any]:
+        try:
+            account = await pool.clear_cooldown(account_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        return {"data": account.public_dict()}
+
+    @app.get("/", include_in_schema=False)
+    async def web_ui() -> FileResponse:
+        return FileResponse(WEB_DIR / "index.html")
 
     return app

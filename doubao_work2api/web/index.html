@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>DoubaoWork2API 控制台</title>
+  <link rel="stylesheet" href="/ui-assets/app.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="DoubaoWork2API 首页">
+        <span class="brand-mark">DB</span>
+        <span>
+          <strong>DoubaoWork2API</strong>
+          <small>Direct relay console</small>
+        </span>
+      </a>
+      <div class="topbar-actions">
+        <span id="connectionState" class="status-pill status-idle">未连接</span>
+        <button id="autoRefreshButton" class="button button-quiet" type="button" aria-pressed="false">自动刷新 关</button>
+        <button id="logoutButton" class="button button-quiet" type="button">退出</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="loginView" class="login-layout" hidden>
+        <div class="login-copy">
+          <span class="eyebrow">LOCAL CONTROL PLANE</span>
+          <h1>把豆包工作版<br>变成稳定的 API。</h1>
+          <p>账号凭证只保存在你自己的服务器。控制台不展示 Cookie，也不会把账号数据发送到任何第三方。</p>
+          <div class="signal-list" aria-label="控制台能力">
+            <span>账号池</span>
+            <span>冷却监控</span>
+            <span>在线测试</span>
+            <span>请求日志</span>
+          </div>
+        </div>
+        <form id="loginForm" class="panel login-panel">
+          <div>
+            <span class="eyebrow">AUTHENTICATION</span>
+            <h2>进入控制台</h2>
+            <p class="muted">输入启动服务时配置的 <code>DOUBAO_WORK_API_KEY</code>。</p>
+          </div>
+          <label class="field">
+            <span>API Key</span>
+            <input id="loginKey" type="password" autocomplete="current-password" placeholder="sk-..." required>
+          </label>
+          <p id="loginError" class="form-error" role="alert" hidden></p>
+          <button class="button button-primary button-wide" type="submit">连接网关</button>
+        </form>
+      </section>
+
+      <section id="dashboardView" hidden>
+        <div class="hero-row">
+          <div>
+            <span class="eyebrow">GATEWAY OVERVIEW</span>
+            <h1>运行状态</h1>
+            <p id="lastUpdated" class="muted">等待首次同步</p>
+          </div>
+          <button id="refreshButton" class="button button-secondary" type="button">刷新数据</button>
+        </div>
+
+        <div class="metric-grid">
+          <article class="metric-card metric-dark">
+            <span>账号总数</span>
+            <strong id="metricAccounts">0</strong>
+            <small>已导入账号</small>
+          </article>
+          <article class="metric-card">
+            <span>可接单</span>
+            <strong id="metricAvailable">0</strong>
+            <small>未禁用且未冷却</small>
+          </article>
+          <article class="metric-card">
+            <span>冷却中</span>
+            <strong id="metricCooling">0</strong>
+            <small>等待自动恢复</small>
+          </article>
+          <article class="metric-card metric-accent">
+            <span>成功请求</span>
+            <strong id="metricSuccess">0</strong>
+            <small>最近 100 条日志</small>
+          </article>
+        </div>
+
+        <div class="workspace-grid">
+          <section class="panel accounts-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">ACCOUNT POOL</span>
+                <h2>账号池</h2>
+              </div>
+              <button id="openImportButton" class="button button-primary" type="button">导入账号</button>
+            </div>
+            <div id="accountList" class="account-list" aria-live="polite"></div>
+            <div id="accountEmpty" class="empty-state" hidden>
+              <strong>还没有账号</strong>
+              <p>导入账号 JSON 后即可开始接单。</p>
+              <button class="button button-secondary" type="button" data-action="open-import">导入第一个账号</button>
+            </div>
+          </section>
+
+          <aside class="side-stack">
+            <section class="panel api-panel">
+              <span class="eyebrow">CONNECTION</span>
+              <h2>接入信息</h2>
+              <dl class="detail-list">
+                <div>
+                  <dt>Base URL</dt>
+                  <dd><code id="baseUrl">/v1</code></dd>
+                </div>
+                <div>
+                  <dt>默认模型</dt>
+                  <dd><code id="defaultModel">deepseek-v4.1-flash</code></dd>
+                </div>
+                <div>
+                  <dt>鉴权</dt>
+                  <dd>Bearer / x-api-key</dd>
+                </div>
+              </dl>
+              <div class="key-hint">
+                <span>当前会话 Key</span>
+                <code id="maskedKey">sk-••••••••</code>
+              </div>
+            </section>
+
+            <section class="panel test-panel">
+              <div class="panel-heading compact">
+                <div>
+                  <span class="eyebrow">SMOKE TEST</span>
+                  <h2>模型测试</h2>
+                </div>
+                <span class="tiny-badge">实时上游</span>
+              </div>
+              <form id="chatForm">
+                <label class="field">
+                  <span>提示词</span>
+                  <textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea>
+                </label>
+                <label class="switch-row">
+                  <span>
+                    <strong>流式返回</strong>
+                    <small>观察 SSE 增量输出</small>
+                  </span>
+                  <input id="streamToggle" type="checkbox">
+                </label>
+                <button id="chatSubmit" class="button button-primary button-wide" type="submit">发送测试请求</button>
+              </form>
+              <div id="chatOutput" class="chat-output" hidden>
+                <div class="chat-output-head">
+                  <span id="chatStatus">等待响应</span>
+                  <span id="chatLatency"></span>
+                </div>
+                <pre id="chatText"></pre>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <section class="panel logs-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">REQUEST TRACE</span>
+              <h2>请求日志</h2>
+            </div>
+            <span class="muted small">仅记录元数据，不保存提示词与 Cookie</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>状态</th>
+                  <th>模型</th>
+                  <th>账号</th>
+                  <th>模式</th>
+                  <th>耗时</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody id="logRows"></tbody>
+            </table>
+          </div>
+          <div id="logEmpty" class="empty-state compact" hidden>
+            <strong>暂无请求</strong>
+            <p>通过 API 或上方测试面板发起请求后会显示在这里。</p>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="importDialog" class="dialog">
+    <form id="importForm" method="dialog">
+      <div class="dialog-heading">
+        <div>
+          <span class="eyebrow">ACCOUNT INGEST</span>
+          <h2>导入账号</h2>
+        </div>
+        <button class="icon-button" type="button" data-action="close-import" aria-label="关闭">×</button>
+      </div>
+      <p class="muted">粘贴单个账号 JSON 对象，或账号数组。内容只在本地解析并写入 <code>accounts/</code>。</p>
+      <label class="field">
+        <span>账号 JSON</span>
+        <textarea id="importJson" rows="14" spellcheck="false" placeholder='{"id":"account-1","device_id":"...","web_id":"...","cookies":{"sessionid":"..."}}'></textarea>
+      </label>
+      <label class="field file-field">
+        <span>或从 JSON 文件导入（可多选）</span>
+        <input id="importFiles" type="file" accept=".json,application/json" multiple>
+      </label>
+      <p id="importError" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-action="close-import">取消</button>
+        <button class="button button-primary" type="submit">导入并保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/ui-assets/app.js"></script>
+</body>
+</html>
