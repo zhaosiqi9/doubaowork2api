@@ -209,7 +209,8 @@ async def capture(
         async def on_request(request) -> None:
             if "chat/completion" not in request.url:
                 return
-            print("REQUEST", request.method, request.url[:500])
+            parsed_url = urlsplit(request.url)
+            print("REQUEST", request.method, parsed_url.path)
             if captured.done():
                 return
             final_url = request.url.replace(

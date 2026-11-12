@@ -104,6 +104,7 @@ curl http://127.0.0.1:18789/v1/chat/completions \
 
 `scripts/probe_direct_replay.py` 是从已登录 DoubaoWork 的 CDP 会话抓取一次真实
 请求，再用外部 `httpx` 重放的诊断脚本。它只用于验证上游协议，不是运行时依赖。
+正式的最小直连验证脚本是 `scripts/live_direct_probe.py`。
 
 ```powershell
 python scripts/probe_direct_replay.py --prompt "只回复 PROBE"
