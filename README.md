@@ -1,8 +1,8 @@
-# DoubaoWork2API
+# doubaowork2api
 
 把豆包工作电脑版的模型转换为 OpenAI 兼容 API。服务端只保存用户自行导入的
 账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包上游，不需要持续
-运行 DoubaoWork、浏览器、CDP 或 Windows 桌面。
+运行豆包工作电脑版、浏览器、CDP 或 Windows 桌面。
 
 当前版本：`0.1.0`。这是文本 Chat Completions 的首个公开版本，不包含图片、
 视频或其他媒体接口。
@@ -61,7 +61,7 @@
 账号目录默认是 `accounts/`，已被 `.gitignore` 排除。不要把账号文件提交到
 GitHub，也不要贴到聊天中。
 
-如果本机已有登录中的 DoubaoWork，可以直接在控制台点「扫描本机客户端」：
+如果本机已有登录中的豆包工作电脑版，可以直接在控制台点「扫描本机客户端」：
 
 桌面扫描是可选能力，需要额外安装：
 
@@ -69,7 +69,7 @@ GitHub，也不要贴到聊天中。
 python -m pip install -e ".[desktop]"
 ```
 
-1. 关闭已经运行的 DoubaoWork。
+1. 关闭已经运行的豆包工作电脑版。
 2. 用调试端口启动并登录客户端：
 
 ```powershell
@@ -90,13 +90,13 @@ python scripts/export_desktop_account.py `
   --output accounts/account-1.json
 ```
 
-CDP 必须只监听 `127.0.0.1`。扫描或导出完成后就可以关闭 DoubaoWork；
+CDP 必须只监听 `127.0.0.1`。扫描或导出完成后就可以关闭豆包工作电脑版；
 本项目运行时不再需要它。
 
 ## 启动
 
 ```powershell
-cd DoubaoWork2API-hub
+cd doubaowork2api
 python -m pip install -e .
 $env:DOUBAO_WORK_API_KEY = "sk-your-key"
 python -m doubao_work2api
@@ -157,7 +157,7 @@ curl http://127.0.0.1:18789/v1/chat/completions \
 
 ## 协议验证
 
-`scripts/probe_direct_replay.py` 是从已登录 DoubaoWork 的 CDP 会话抓取一次真实
+`scripts/probe_direct_replay.py` 是从已登录豆包工作电脑版的 CDP 会话抓取一次真实
 请求，再用外部 `httpx` 重放的诊断脚本。它只用于验证上游协议，不是运行时依赖。
 正式的最小直连验证脚本是 `scripts/live_direct_probe.py`。
 
@@ -178,7 +178,7 @@ SSE 流。正式版本仍会继续用完整新请求体验证最终文本和 Lin
 - 请求体使用 `os=Linux`、Linux workspace 和 `device_name=LINUX-PROBE` 仍成功
 
 这次测试是在 Windows 上用外部 `httpx` 客户端直连豆包上游完成，不经过
-DoubaoWork 页面；Linux 服务器仍需在目标网络做一次最终回归。
+豆包工作电脑版页面；Linux 服务器仍需在目标网络做一次最终回归。
 
 0.1.0 发布前的补充实测：
 
@@ -189,6 +189,6 @@ DoubaoWork 页面；Linux 服务器仍需在目标网络做一次最终回归。
 ## 安全与限制
 
 - 本项目的账号文件包含登录凭证，按密码级别保护。
-- 不读取 DoubaoWork 的 Cookie 数据库，也不内置签名算法。
+- 不读取豆包工作电脑版的 Cookie 数据库，也不内置签名算法。
 - 上游协议、模型键和风控可能变化；当前只实现文本 Chat Completions。
 - `usage` 为本地估算，不是上游真实 token 账单。

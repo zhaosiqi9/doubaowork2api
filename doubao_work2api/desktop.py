@@ -68,7 +68,7 @@ async def _read_cdp_identity(cdp_url: str) -> tuple[dict[str, str], str, str]:
             browser = await playwright.chromium.connect_over_cdp(cdp_url)
         except Exception as exc:
             raise DesktopScanError(
-                "无法连接桌面客户端调试端口。请确认 DoubaoWork 已登录，"
+                "无法连接桌面客户端调试端口。请确认豆包工作电脑版已登录，"
                 "并使用 --remote-debugging-port=9222 启动。"
             ) from exc
         context = browser.contexts[0]
@@ -119,7 +119,7 @@ async def scan_desktop_account(
     cdp_url = _validate_cdp_url(cdp_url)
     if not _cdp_available(cdp_url):
         raise DesktopScanError(
-            "未检测到本机调试端口 9222。请先关闭 DoubaoWork，再使用 "
+            "未检测到本机调试端口 9222。请先关闭豆包工作电脑版，再使用 "
             "--remote-debugging-port=9222 启动并登录客户端。"
         )
     cookies, device_id, web_id = await _read_cdp_identity(cdp_url)

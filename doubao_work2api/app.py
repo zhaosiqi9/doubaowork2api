@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from . import __version__
 from .accounts import AccountPool
-from .catalog import MODEL_CATALOG
+from .catalog import MODEL_CATALOG, resolve_upstream_key
 from .config import Settings
 from .desktop import DesktopScanError, scan_desktop_account
 from .errors import AuthenticationError, GatewayError
@@ -72,7 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await transport.close()
 
     app = FastAPI(
-        title="DoubaoWork2API",
+        title="doubaowork2api",
         version=__version__,
         lifespan=lifespan,
     )
@@ -148,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(require_auth)],
     )
     async def chat_completions(payload: ChatCompletionRequest):
+        resolve_upstream_key(payload.normalized_model)
         if payload.stream:
             return StreamingResponse(
                 service.stream(payload),

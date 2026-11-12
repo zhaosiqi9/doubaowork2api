@@ -48,6 +48,20 @@ def test_chat_without_account_returns_clear_error(tmp_path) -> None:
     assert response.json()["error"]["code"] == "no_available_account"
 
 
+def test_chat_rejects_unknown_model(tmp_path) -> None:
+    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer secret"},
+            json={
+                "model": "not-in-catalog",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unknown_model"
+
+
 def test_admin_accounts_does_not_expose_cookies(tmp_path) -> None:
     accounts = tmp_path / "accounts"
     accounts.mkdir()
@@ -72,7 +86,7 @@ def test_web_ui_and_assets_are_served(tmp_path) -> None:
         css = client.get("/ui-assets/app.css")
         script = client.get("/ui-assets/app.js")
     assert index.status_code == 200
-    assert "DoubaoWork2API" in index.text
+    assert "doubaowork2api" in index.text
     assert css.status_code == 200
     assert script.status_code == 200
     assert "Content-Security-Policy" in index.headers

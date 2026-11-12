@@ -16,5 +16,5 @@
 
 ### 验证
 
-- `29 passed`。
+- `31 passed`。
 - `deepseek-v4.1-flash` 与 `seed-lite-7b` 均完成真实上游调用。

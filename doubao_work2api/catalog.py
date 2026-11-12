@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .errors import UnknownModelError
+
 
 @dataclass(frozen=True, slots=True)
 class ModelSpec:
@@ -23,8 +25,8 @@ class ModelSpec:
         }
 
 
-# Public ids are stable gateway names. Upstream keys are the values observed in
-# DoubaoWork's model menu; a public alias never invents a fallback model.
+# 公开模型名保持稳定；上游键取自豆包工作电脑版的模型菜单。
+# 公开别名不会静默回退到其他模型。
 MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec(
         id="deepseek-v4.1-flash",
@@ -107,6 +109,8 @@ def find_model(model: str) -> ModelSpec | None:
     return _BY_ID.get(normalize_model(model))
 
 
-def resolve_upstream_key(model: str, default_key: str) -> str:
+def resolve_upstream_key(model: str) -> str:
     spec = find_model(model)
-    return spec.upstream_key if spec else default_key
+    if spec is None:
+        raise UnknownModelError(model)
+    return spec.upstream_key

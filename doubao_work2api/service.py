@@ -194,9 +194,7 @@ class ChatService:
             workspace = self._workspace(account)
             payload = upstream_payload(
                 request,
-                model_key=resolve_upstream_key(
-                    request.normalized_model, self.model_key
-                ),
+                model_key=resolve_upstream_key(request.normalized_model),
                 workspace=workspace,
                 device_name=account.device_name or socket.gethostname().upper(),
                 app_id=self.app_id,

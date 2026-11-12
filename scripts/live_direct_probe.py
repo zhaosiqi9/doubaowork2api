@@ -59,7 +59,7 @@ async def main() -> None:
     prompt = "只回复 OK"
     cookies, device_id, web_id = await read_identity()
     if not cookies or not device_id:
-        raise SystemExit("DoubaoWork is not logged in or CDP identity is missing.")
+        raise SystemExit("豆包工作电脑版未登录，或缺少 CDP 身份信息。")
     settings = Settings(
         request_timeout_seconds=180,
         data_dir=Path("data"),

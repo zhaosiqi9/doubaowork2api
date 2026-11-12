@@ -37,6 +37,17 @@ class NoAvailableAccountError(GatewayError):
     code = "no_available_account"
 
 
+class UnknownModelError(GatewayError):
+    status_code = 400
+    error_type = "invalid_request_error"
+    code = "unknown_model"
+
+    def __init__(self, model: str) -> None:
+        super().__init__(
+            f"Unknown model: {model}. Use GET /v1/models for the supported catalog."
+        )
+
+
 class UpstreamAuthError(GatewayError):
     status_code = 401
     error_type = "upstream_authentication_error"

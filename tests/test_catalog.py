@@ -6,6 +6,7 @@ from doubao_work2api.catalog import (
     normalize_model,
     resolve_upstream_key,
 )
+from doubao_work2api.errors import UnknownModelError
 
 
 def test_catalog_public_ids_are_unique() -> None:
@@ -21,12 +22,22 @@ def test_aliases_resolve_to_public_model() -> None:
 
 def test_upstream_key_follows_requested_model() -> None:
     assert resolve_upstream_key(
-        "person-kimi-k3-1-pro-261111", "fallback"
+        "person-kimi-k3-1-pro-261111"
     ) == "person-kimi-k3-1-pro-261111"
-    assert resolve_upstream_key(
-        "deepseek-v4-pro", "fallback"
-    ) == "person-deepseek-v4-pro-ga-260813"
-    assert resolve_upstream_key("unknown-model", "fallback") == "fallback"
+    assert (
+        resolve_upstream_key("deepseek-v4-pro")
+        == "person-deepseek-v4-pro-ga-260813"
+    )
+
+
+def test_unknown_model_is_rejected() -> None:
+    try:
+        resolve_upstream_key("unknown-model")
+    except UnknownModelError as exc:
+        assert exc.status_code == 400
+        assert exc.code == "unknown_model"
+    else:
+        raise AssertionError("unknown model must not fall back to another model")
 
 
 def test_catalog_contains_observed_model_keys() -> None:
