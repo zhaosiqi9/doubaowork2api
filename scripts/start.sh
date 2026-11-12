@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+set -eu
+
+: "${DOUBAO_WORK_API_KEY:=sk-local-change-me}"
+: "${DOUBAO_WORK_PORT:=18789}"
+export DOUBAO_WORK_API_KEY DOUBAO_WORK_PORT
+
+exec python3 -m doubao_work2api

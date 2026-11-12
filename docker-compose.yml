@@ -1,0 +1,12 @@
+services:
+  doubao-work2api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18789:18789"
+    environment:
+      DOUBAO_WORK_API_KEY: "${DOUBAO_WORK_API_KEY:-sk-local-change-me}"
+      DOUBAO_WORK_COOLDOWN_SECONDS: "60"
+    volumes:
+      - ./accounts:/app/accounts:ro
+      - ./data:/app/data
