@@ -3,7 +3,7 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "doubao-work2api"
+name = "doubaowork2api"
 version = "0.1.0"
 description = "Direct, account-pooled OpenAI-compatible gateway for DoubaoWork"
 readme = "README.md"
