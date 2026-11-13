@@ -46,6 +46,7 @@ class ModelCard(BaseModel):
     context_window: int | None = None
     reasoning_efforts: list[str] = Field(default_factory=list)
     default_reasoning_effort: str | None = None
+    image_input: bool | None = None
 
 
 class ModelList(BaseModel):

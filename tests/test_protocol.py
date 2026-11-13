@@ -215,7 +215,6 @@ def test_upstream_payload_validates_direct_service_use(tmp_path) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}],
         [{"type": "input_audio", "input_audio": {"data": "x", "format": "wav"}}],
         [{"type": "video_url", "video_url": {"url": "https://example.test/a.mp4"}}],
         [{"type": "unknown_part", "value": 1}],

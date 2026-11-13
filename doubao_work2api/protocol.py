@@ -15,6 +15,8 @@ from .catalog import (
 )
 from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
+from .image_inputs import validate_image_source
+from .image_upload import UploadedImage
 
 
 class RequestValidationError(GatewayError):
@@ -105,6 +107,7 @@ def _has_tool_history(messages: list[ChatMessage]) -> bool:
 
 def _validate_content(request: ChatCompletionRequest) -> None:
     count = 0
+    image_count = 0
     for message in request.messages:
         content = message.content
         if content is None:
@@ -117,11 +120,25 @@ def _validate_content(request: ChatCompletionRequest) -> None:
                     raise UnsupportedContentError(
                         "Message content parts must be objects."
                     )
+                if part.get("type") == "image_url":
+                    if message.role != "user":
+                        raise UnsupportedContentError("Images are supported only in user messages.")
+                    image = part.get("image_url")
+                    if not isinstance(image, dict) or not isinstance(image.get("url"), str):
+                        raise UnsupportedContentError("image_url must contain a string url.")
+                    if image.get("detail", "auto") not in {"auto", "low", "high"}:
+                        raise UnsupportedContentError("image_url.detail must be auto, low, or high.")
+                    validate_image_source(image["url"])
+                    image_count += 1
+                    if image_count > 8:
+                        raise UnsupportedContentError("At most 8 images may be included in one request.")
+                    count += 1
+                    continue
                 if part.get("type") not in {"text", "input_text"}:
                     kind = part.get("type")
                     raise UnsupportedContentError(
                         f"Unsupported message content type: {kind!r}. "
-                        "Only text and input_text content are supported."
+                        "Only text, input_text, and user image_url content are supported."
                     )
                 if not isinstance(part.get("text"), str):
                     raise UnsupportedContentError(
@@ -242,9 +259,19 @@ def text_content(message: ChatMessage) -> str:
 def render_prompt(messages: list[ChatMessage]) -> str:
     systems: list[str] = []
     dialogue: list[str] = []
+    image_index = 0
     for message in messages:
         rendered_history = render_tool_history(message)
         content = text_content(message)
+        if isinstance(message.content, list) and any(part.get("type") == "image_url" for part in message.content):
+            parts = []
+            for part in message.content:
+                if part.get("type") == "image_url":
+                    image_index += 1
+                    parts.append(f"[Attached image {image_index}]")
+                elif part.get("type") in {"text", "input_text"}:
+                    parts.append(part["text"])
+            content = "\n".join(parts)
         if message.role == "tool":
             content = rendered_history or ""
         elif rendered_history is not None:
@@ -280,6 +307,7 @@ def upstream_payload(
     app_id: str,
     device_id: str,
     reasoning_effort: int | None = None,
+    images: list[UploadedImage] | None = None,
 ) -> dict[str, Any]:
     validate_request(request)
     spec = find_model(request.normalized_model)
@@ -461,6 +489,18 @@ def upstream_payload(
             "memory_profile": spec.memory_profile,
             "total_window_size": str(spec.context_window),
         }
+    image_count = sum(1 for message in request.messages if isinstance(message.content, list) for part in message.content if part.get("type") == "image_url")
+    if image_count != len(images or []):
+        raise RequestValidationError("Image inputs must be uploaded before building the upstream request.", code="images_not_prepared")
+    if images:
+        payload["messages"][0]["content_block"].insert(0, {
+            "block_type": 10052, "block_id": str(uuid.uuid4()), "parent_id": "",
+            "meta_info": [], "extra_info": {}, "append_fields": [],
+            "content": {
+                "attachment_block": {"attachments": [image.attachment() for image in images]},
+                "pc_event_block": "",
+            },
+        })
     return payload
 
 

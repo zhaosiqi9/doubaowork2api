@@ -11,7 +11,7 @@ from doubao_work2api.config import Settings
 @pytest.mark.parametrize("change,code", [
     ({"reasoning_effort": "ultra"}, "invalid_reasoning_effort"),
     ({"max_tokens": 8}, "unsupported_parameter"),
-    ({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.invalid/image.png"}}]}]}, "unsupported_content"),
+    ({"messages": [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x", "format": "wav"}}]}]}, "unsupported_content"),
     ({"tools": [{"type": "computer", "name": "desktop"}]}, None),
 ])
 def test_conversion_rejects_unsupported_input_before_borrowing_accounts(tmp_path, stream, change, code):
@@ -33,9 +33,11 @@ def test_public_models_only_claim_confirmed_capabilities(tmp_path):
     assert response.status_code == 200
     models = response.json()["data"]
     assert models[0]["context_window"] == 300_000
+    assert models[0]["image_input"] is True
     assert models[0]["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
     assert all(model["context_window"] is None for model in models[1:])
     assert all(model["reasoning_efforts"] == [] for model in models[1:])
+    assert all(model["image_input"] is None for model in models[1:])
 
 
 def test_reasoning_validated_after_configured_default_model_is_applied(tmp_path):

@@ -301,6 +301,24 @@ textarea { resize: vertical; line-height: 1.55; }
 .switch-row small { margin-top: 2px; color: var(--dim); font-size: 10px; }
 .switch-row input { width: 35px; height: 19px; accent-color: var(--accent); }
 
+.chat-image-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px 10px; padding: 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--panel-soft); cursor: pointer; }
+.chat-image-picker:hover { border-color: var(--accent); background: var(--accent-soft); }
+.chat-image-picker input { grid-column: 1 / -1; width: 100%; min-height: 0; padding: 0; border: 0; background: transparent; font-size: 10.5px; }
+.chat-image-picker input::file-selector-button { margin-right: 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--fg); padding: 6px 9px; font: 650 10px/1.2 var(--mono); cursor: pointer; }
+.chat-image-picker-label { color: var(--accent); font: 700 10px/1.2 var(--mono); }
+.chat-image-picker small { color: var(--dim); font-size: 10px; line-height: 1.45; }
+.chat-image-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--dim); font: 10px/1.3 var(--mono); }
+.chat-image-toolbar .text-button:disabled { color: var(--dim-light); cursor: not-allowed; }
+.chat-image-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.chat-image-item { display: grid; grid-template-columns: 34px minmax(0, 1fr) 30px; align-items: center; gap: 8px; min-height: 44px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.chat-image-item.pending { border-style: dashed; }
+.chat-image-item img { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; background: var(--panel-strong); }
+.chat-image-copy { min-width: 0; display: grid; gap: 2px; }
+.chat-image-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.chat-image-copy span { color: var(--dim); font: 9.5px/1.3 var(--mono); }
+.chat-image-remove { width: 30px; height: 30px; flex-basis: 30px; border: 0; background: transparent; color: var(--dim); font-size: 18px; line-height: 1; }
+.chat-image-remove:hover { background: var(--red-soft); color: var(--red); }
+
 .button {
   display: inline-flex;
   align-items: center;

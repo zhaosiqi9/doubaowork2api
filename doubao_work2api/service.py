@@ -32,6 +32,8 @@ from .protocol import (
 )
 from .transport import DirectTransport
 from .tool_bridge import parse_tool_response
+from .image_inputs import load_image, ImageInput
+from .image_upload import upload_image, ImageUploadError
 
 
 class ChatService:
@@ -77,7 +79,13 @@ class ChatService:
             if not answer and not tool_calls:
                 raise UpstreamError("Doubao returned an empty response.")
             prompt_text = json.dumps({
-                "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+                "messages": [
+                    {**message.model_dump(exclude_none=True), "content": [
+                        {"type": "image_url"} if part.get("type") == "image_url" else part
+                        for part in message.content
+                    ]} if isinstance(message.content, list) else message.model_dump(exclude_none=True)
+                    for message in request.messages
+                ],
                 "tools": request.tools,
             }, ensure_ascii=False)
             output_text = answer + "".join(reasoning)
@@ -195,6 +203,21 @@ class ChatService:
         log_entry: RequestLogEntry | None,
         allowed_ids: set[str] | None = None,
     ) -> AsyncIterator[tuple[str, str]]:
+        sources = [
+            part["image_url"]["url"] for message in request.messages if isinstance(message.content, list)
+            for part in message.content if part.get("type") == "image_url"
+        ]
+        if sources and not any(account.available and (allowed_ids is None or account.id in allowed_ids) for account in self.pool.accounts):
+            raise NoAvailableAccountError("No usable Doubao account.")
+        images: list[ImageInput] = []
+        total_bytes = 0
+        for source in sources:
+            image = await load_image(source)
+            total_bytes += len(image.data)
+            if total_bytes > 20 * 1024 * 1024:
+                from .protocol import UnsupportedContentError
+                raise UnsupportedContentError("Total image data exceeds the 20 MiB request limit.")
+            images.append(image)
         attempted: set[str] = set()
         last_error: Exception | None = None
         for _ in range(max(1, len(self.pool.accounts))):
@@ -212,7 +235,7 @@ class ChatService:
                 self.request_log.account(log_entry, account.id)
             emitted = False
             try:
-                async for fragment in self._fragments(account, request):
+                async for fragment in self._fragments(account, request, images):
                     emitted = True
                     yield fragment
                 if not emitted:
@@ -250,6 +273,10 @@ class ChatService:
                     raise
                 self.pool.mark_cooldown(account, exc.message, error_code=exc.code)
                 last_error = exc
+            except ImageUploadError:
+                # A storage upload failure does not invalidate this account and
+                # must not fan out the same private images across the pool.
+                raise
             except (UpstreamError, OSError) as exc:
                 if emitted:
                     raise
@@ -262,9 +289,14 @@ class ChatService:
         raise NoAvailableAccountError("No usable Doubao account.")
 
     async def _fragments(
-        self, account: Account, request: ChatCompletionRequest
+        self, account: Account, request: ChatCompletionRequest,
+        images: list[ImageInput] | None = None,
     ) -> AsyncIterator[tuple[str, str]]:
         async with account.lock:
+            uploaded = [
+                await upload_image(self.transport, account, image, filename=f"image-{index}.{image.filename.rsplit('.', 1)[-1]}")
+                for index, image in enumerate(images or [], 1)
+            ]
             workspace = self._workspace(account)
             payload = upstream_payload(
                 request,
@@ -273,6 +305,7 @@ class ChatService:
                 device_name=account.device_name or socket.gethostname().upper(),
                 app_id=self.app_id,
                 device_id=account.device_id,
+                images=uploaded,
             )
             thinking = False
             async for event in self.transport.stream(account, payload):

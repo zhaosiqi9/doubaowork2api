@@ -114,6 +114,20 @@
                   <label class="field"><span>模型</span><select id="chatModel"></select></label>
                   <label class="field"><span>思考强度</span><select id="chatReasoning"><option value="">上游默认</option></select></label>
                   <label class="field"><span>提示词</span><textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea></label>
+                  <div class="field">
+                    <span>图片（可选）</span>
+                    <label class="chat-image-picker">
+                      <input id="chatImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+                      <span class="chat-image-picker-label">选择图片</span>
+                      <small>PNG / JPEG / WebP / GIF，最多 8 张；单张 ≤ 10 MiB，总计 ≤ 20 MiB。</small>
+                    </label>
+                    <div class="chat-image-toolbar">
+                      <span id="chatImageSummary">未选择图片</span>
+                      <button type="button" class="text-button" id="chatImageClear" disabled>清空</button>
+                    </div>
+                    <ul id="chatImageList" class="chat-image-list" hidden></ul>
+                    <p id="chatImageFeedback" class="form-error" role="status" hidden></p>
+                  </div>
                   <label class="switch-row"><span><strong>流式返回</strong><small>观察 SSE 增量输出</small></span><input id="streamToggle" type="checkbox"></label>
                   <button class="button primary wide" type="submit" id="chatSubmit">发送测试请求</button>
                 </form>
@@ -133,7 +147,7 @@
             <div><b id="catalogCount">0</b><span>可用模型</span></div>
             <div><b id="catalogDefault">—</b><span>默认模型</span></div>
             <div><b>8</b><span>目录映射</span></div>
-            <div><b>0</b><span>媒体能力</span></div>
+            <div><b id="catalogImageCount">0</b><span>已验证识图</span></div>
           </div>
           <section class="panel">
             <div class="panel-heading"><div><span class="eyebrow">ROUTING TABLE</span><h2>模型与上游映射</h2></div><span class="muted small">/v1/models 同源</span></div>

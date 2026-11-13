@@ -8,6 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "doubao_work2api", "we
 function extractFunction(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `missing function ${name}`);
+  const prefixStart = source.slice(Math.max(0, start - 6), start) === "async " ? start - 6 : start;
   const bodyStart = source.indexOf("{", start);
   let depth = 0;
   let quote = null;
@@ -28,7 +29,7 @@ function extractFunction(name) {
     if (character === "{") depth += 1;
     if (character === "}") {
       depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
+      if (depth === 0) return source.slice(prefixStart, index + 1);
     }
   }
   throw new Error(`unterminated function ${name}`);
@@ -40,6 +41,7 @@ function makeContext(extra = {}) {
     Intl,
     Number,
     String,
+    Promise,
     Set,
     Map,
     Error,
@@ -172,10 +174,207 @@ function testFilterAndSelection() {
   assert.equal(elements.batchButtons.every((button) => button.disabled === true), true);
 }
 
+function testChatImageValidation() {
+  const context = loadFunctions(["chatImageMime", "chatImageStats", "validateChatImageFile", "formatFileSize"], makeContext({
+    CHAT_IMAGE_TYPES: new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
+  }));
+  const png = { name: "one.png", size: 1024, type: "image/png" };
+  const jpeg = { name: "two.jpg", size: 2 * 1024 * 1024, type: "image/jpeg" };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.validateChatImageFile(png))), { name: "one.png", size: 1024, type: "image/png" });
+  assert.equal(context.chatImageMime({ type: "IMAGE/WEBP" }), "image/webp");
+  assert.throws(() => context.validateChatImageFile({ name: "x.svg", size: 1, type: "image/svg+xml" }), /仅支持 PNG、JPEG、WebP、GIF/);
+  assert.throws(() => context.validateChatImageFile({ name: "big.png", size: 10 * 1024 * 1024 + 1, type: "image/png" }), /单张不能超过 10 MiB/);
+  assert.throws(() => context.validateChatImageFile(png, Array.from({ length: 8 }, (_, index) => ({ size: index }))), /最多选择 8 张/);
+  assert.throws(() => context.validateChatImageFile(jpeg, [{ size: 19 * 1024 * 1024 }]), /总大小不能超过 20 MiB/);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.chatImageStats([png, jpeg]))), { count: 2, bytes: 1024 + 2 * 1024 * 1024 });
+  assert.equal(context.formatFileSize(1024), "1.0 KiB");
+  assert.equal(context.formatFileSize(2 * 1024 * 1024), "2.00 MiB");
+}
+
+function testChatContentParts() {
+  const context = loadFunctions(["chatContentParts"], makeContext());
+  assert.equal(context.chatContentParts("hello", []), "hello");
+  assert.equal(context.chatContentParts("  hello  ", []), "hello");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.chatContentParts("", [{ name: "one.png", dataUrl: "data:image/png;base64,AA" }]))),
+    [{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } }],
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.chatContentParts("describe", [
+      { name: "one.png", dataUrl: "data:image/png;base64,AA" },
+      { name: "two.jpg", dataUrl: "data:image/jpeg;base64,BB" },
+    ]))),
+    [
+      { type: "text", text: "describe" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AA" } },
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,BB" } },
+    ],
+  );
+  assert.throws(() => context.chatContentParts("hello", [{ name: "pending.png", dataUrl: "" }]), /尚未读取完成/);
+}
+
+function testChatContentSnapshot() {
+  const context = loadFunctions(["chatContentParts"], makeContext());
+  const state = {
+    chatImages: [
+      { name: "one.png", dataUrl: "data:image/png;base64,AA" },
+      { name: "two.png", dataUrl: "data:image/png;base64,BB" },
+    ],
+  };
+  const snapshot = state.chatImages.map((image) => ({ ...image }));
+  const content = context.chatContentParts("inspect", snapshot);
+  state.chatImages.splice(0);
+  assert.equal(content.length, 3);
+  assert.equal(content[1].image_url.url, "data:image/png;base64,AA");
+  assert.equal(content[2].image_url.url, "data:image/png;base64,BB");
+}
+
+function testChatImageCapabilityLabel() {
+  const context = loadFunctions(["chatImageCapabilityLabel"], makeContext());
+  assert.equal(context.chatImageCapabilityLabel({ image_input: true }), "已验证识图");
+  assert.equal(context.chatImageCapabilityLabel({ image_input: null }), "");
+  assert.equal(context.chatImageCapabilityLabel({ image_input: false }), "");
+  assert.equal(context.chatImageCapabilityLabel({}), "");
+}
+
+function testChatImageEpochInvalidatesReads() {
+  const context = loadFunctions([
+    "formatFileSize", "chatImageStats", "chatImageKey", "renderChatImages",
+    "clearChatImages", "removeChatImage",
+  ], makeContext({
+    state: {
+      chatImages: [{ id: "one" }, { id: "two" }],
+      chatImageEpoch: 3,
+      chatImageQueue: Promise.resolve(),
+    },
+    $: () => ({ value: "selected", replaceChildren() {}, append() {}, hidden: false, textContent: "", disabled: false }),
+    document: {
+      createElement: () => ({
+        className: "",
+        dataset: {},
+        setAttribute() {},
+        append() {},
+      }),
+    },
+    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
+  }));
+  assert.equal(context.chatImageKey({ name: "one.png", size: 4, lastModified: 5 }), "one.png\u00004\u00005");
+  context.removeChatImage("one");
+  assert.equal(context.state.chatImageEpoch, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.chatImages.map((image) => image.id))), ["two"]);
+  context.clearChatImages();
+  assert.equal(context.state.chatImageEpoch, 4);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.chatImages)), []);
+  context.removeChatImage("missing");
+  assert.equal(context.state.chatImageEpoch, 4);
+}
+
+function makeChatImageContext({ state, readChatImage }) {
+  return loadFunctions([
+    "formatFileSize", "chatImageMime", "chatImageStats", "validateChatImageFile",
+    "chatImageKey", "renderChatImages", "addChatImageFiles", "enqueueChatImageFiles",
+    "removeChatImage",
+  ], makeContext({
+    state,
+    readChatImage,
+    showToast: () => {},
+    CHAT_IMAGE_TYPES: new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+    CHAT_IMAGE_LIMITS: { count: 8, fileBytes: 10 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 },
+    $: () => ({ value: "", replaceChildren() {}, append() {}, hidden: false, textContent: "", disabled: false }),
+    document: {
+      createElement: () => ({
+        className: "",
+        dataset: {},
+        setAttribute() {},
+        append() {},
+      }),
+    },
+  }));
+}
+
+async function testChatImageQueueUsesEnqueueEpoch() {
+  const gate = {};
+  gate.promise = new Promise((resolve) => { gate.release = resolve; });
+  let reads = 0;
+  const state = {
+    sessionEpoch: 7,
+    chatImageEpoch: 4,
+    chatImages: [],
+    chatImageQueue: Promise.resolve(),
+  };
+  const context = makeChatImageContext({
+    state,
+    readChatImage: async () => {
+      reads += 1;
+      await gate.promise;
+      return "data:image/png;base64,AA";
+    },
+  });
+  const file = { name: "old.png", size: 10, type: "image/png", lastModified: 1 };
+  context.enqueueChatImageFiles([file]);
+  state.sessionEpoch += 1;
+  gate.release();
+  await context.state.chatImageQueue;
+  assert.equal(reads, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.chatImages)), []);
+}
+
+async function testChatImageRemoveDoesNotCancelOtherReads() {
+  const gates = [];
+  const state = {
+    sessionEpoch: 1,
+    chatImageEpoch: 0,
+    chatImages: [],
+    chatImageQueue: Promise.resolve(),
+  };
+  const context = makeChatImageContext({
+    state,
+    readChatImage: async (file) => {
+      const gate = {};
+      gate.promise = new Promise((resolve) => { gate.release = resolve; });
+      gates.push({ name: file.name, gate });
+      await gate.promise;
+      return `data:image/png;base64,${file.name}`;
+    },
+  });
+  const first = { name: "first.png", size: 10, type: "image/png", lastModified: 1 };
+  const second = { name: "second.png", size: 10, type: "image/png", lastModified: 2 };
+  context.enqueueChatImageFiles([first, second]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.chatImages.length, 1);
+  assert.equal(state.chatImages[0].name, "first.png");
+  context.removeChatImage(state.chatImages[0].id);
+  assert.equal(state.chatImageEpoch, 0);
+  gates[0].gate.release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(state.chatImages.length, 1);
+  assert.equal(state.chatImages[0].name, "second.png");
+  gates[1].gate.release();
+  await context.state.chatImageQueue;
+  assert.equal(state.chatImages.length, 1);
+  assert.equal(state.chatImages[0].name, "second.png");
+  assert.equal(state.chatImages[0].pending, false);
+  assert.equal(state.chatImages[0].dataUrl, "data:image/png;base64,second.png");
+}
+
 testFormatTime();
 testAccountImportDocuments();
 testAccountImportFile();
 testMissingKeyAccounts();
 testMissingBindingSaveGuard();
 testFilterAndSelection();
-console.log("test_web.js: all tests passed");
+testChatImageValidation();
+testChatContentParts();
+testChatContentSnapshot();
+testChatImageCapabilityLabel();
+testChatImageEpochInvalidatesReads();
+
+(async () => {
+  await testChatImageQueueUsesEnqueueEpoch();
+  await testChatImageRemoveDoesNotCancelOtherReads();
+  console.log("test_web.js: all tests passed");
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -28,6 +28,7 @@ class ModelSpec:
     reasoning_levels: tuple[str, ...] = ()
     default_reasoning_effort: str | None = None
     memory_profile: str | None = None
+    image_input: bool | None = None
 
     def public_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -39,6 +40,7 @@ class ModelSpec:
             "description": self.description,
             "context_window": self.context_window,
             "reasoning_efforts": list(self.reasoning_levels),
+            "image_input": self.image_input,
         }
         if self.default_reasoning_effort is not None:
             result["default_reasoning_effort"] = self.default_reasoning_effort
@@ -62,6 +64,7 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         reasoning_levels=REASONING_LEVELS,
         default_reasoning_effort="max",
         memory_profile="300k_230",
+        image_input=True,
     ),
     ModelSpec(
         id="seed-lite-7b",

@@ -16,7 +16,18 @@ const state = {
   analyticsRange: "all",
   toastTimer: null,
   refreshTimer: null,
+  chatImages: [],
+  chatImageEpoch: 0,
+  chatImageQueue: Promise.resolve(),
+  chatAbortController: null,
 };
+
+const CHAT_IMAGE_LIMITS = Object.freeze({
+  count: 8,
+  fileBytes: 10 * 1024 * 1024,
+  totalBytes: 20 * 1024 * 1024,
+});
+const CHAT_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 const PAGE_META = {
   overview: ["总览", "账号、请求和网关状态一屏看完。"],
@@ -93,6 +104,202 @@ function formatDuration(value) {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
 }
 
+function formatFileSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
+function chatImageMime(file) {
+  const type = String(file?.type || "").toLowerCase();
+  return CHAT_IMAGE_TYPES.has(type) ? type : "";
+}
+
+function chatImageStats(images) {
+  return (images || []).reduce((total, image) => ({
+    count: total.count + 1,
+    bytes: total.bytes + Number(image?.size || 0),
+  }), { count: 0, bytes: 0 });
+}
+
+function validateChatImageFile(file, images = []) {
+  const name = String(file?.name || "图片");
+  const size = Number(file?.size);
+  const mime = chatImageMime(file);
+  if (!mime) throw new Error(`${name}：仅支持 PNG、JPEG、WebP、GIF`);
+  if (!Number.isFinite(size) || size < 0) throw new Error(`${name}：无法读取文件大小`);
+  if (size > CHAT_IMAGE_LIMITS.fileBytes) throw new Error(`${name}：单张不能超过 10 MiB`);
+  const stats = chatImageStats(images);
+  if (stats.count >= CHAT_IMAGE_LIMITS.count) throw new Error("最多选择 8 张图片");
+  if (stats.bytes + size > CHAT_IMAGE_LIMITS.totalBytes) throw new Error("图片总大小不能超过 20 MiB");
+  return { name, size, type: mime };
+}
+
+function chatContentParts(prompt, images = []) {
+  const text = String(prompt || "").trim();
+  if (!images.length) return text;
+  const parts = text ? [{ type: "text", text }] : [];
+  for (const image of images) {
+    if (!image?.dataUrl) throw new Error(`图片 ${image?.name || ""} 尚未读取完成`);
+    parts.push({ type: "image_url", image_url: { url: image.dataUrl } });
+  }
+  return parts;
+}
+
+function chatImageCapabilityLabel(model) {
+  if (model?.image_input === true) return "已验证识图";
+  return "";
+}
+
+function chatImageKey(file) {
+  return `${file?.name || ""}\u0000${Number(file?.size || 0)}\u0000${file?.lastModified || 0}`;
+}
+
+function chatImageReadError(error) {
+  return error?.message ? `读取失败：${error.message}` : "读取失败，请重试";
+}
+
+function readChatImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result !== "string" || !reader.result.startsWith("data:image/")) {
+        reject(new Error("文件不是可识别的图片"));
+        return;
+      }
+      resolve(reader.result);
+    }, { once: true });
+    reader.addEventListener("error", () => reject(reader.error || new Error("文件读取失败")), { once: true });
+    reader.addEventListener("abort", () => reject(new Error("文件读取已取消")), { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderChatImages() {
+  const list = $("#chatImageList");
+  const images = state.chatImages;
+  const stats = chatImageStats(images);
+  list.replaceChildren();
+  list.hidden = images.length === 0;
+  for (const [index, image] of images.entries()) {
+    const item = document.createElement("li");
+    item.className = `chat-image-item${image.pending ? " pending" : ""}`;
+    const thumb = document.createElement("img");
+    thumb.alt = "";
+    if (image.previewUrl) thumb.src = image.previewUrl;
+    else thumb.hidden = true;
+    const copy = document.createElement("div");
+    copy.className = "chat-image-copy";
+    const name = document.createElement("strong");
+    name.textContent = image.name;
+    name.title = image.name;
+    const size = document.createElement("span");
+    size.textContent = `${formatFileSize(image.size)} · 第 ${index + 1} 张${image.pending ? " · 读取中" : ""}`;
+    copy.append(name, size);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button chat-image-remove";
+    remove.dataset.chatImageRemove = image.id;
+    remove.setAttribute("aria-label", `移除 ${image.name}`);
+    remove.textContent = "×";
+    item.append(thumb, copy, remove);
+    list.append(item);
+  }
+  $("#chatImageSummary").textContent = images.length
+    ? `${stats.count} / ${CHAT_IMAGE_LIMITS.count} 张 · ${formatFileSize(stats.bytes)} / 20 MiB`
+    : "未选择图片";
+  $("#chatImageClear").disabled = images.length === 0;
+}
+
+function clearChatImages() {
+  state.chatImageEpoch += 1;
+  state.chatImages = [];
+  state.chatImageQueue = Promise.resolve();
+  if ($("#chatImageInput")) $("#chatImageInput").value = "";
+  if ($("#chatImageList")) {
+    $("#chatImageList").replaceChildren();
+    $("#chatImageList").hidden = true;
+    $("#chatImageSummary").textContent = "未选择图片";
+    $("#chatImageClear").disabled = true;
+  }
+}
+
+function removeChatImage(id) {
+  const next = state.chatImages.filter((image) => image.id !== id);
+  if (next.length === state.chatImages.length) return;
+  state.chatImages = next;
+  renderChatImages();
+}
+
+async function addChatImageFiles(files, epoch, sessionEpoch) {
+  if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+  const selected = [...files];
+  const rejected = [];
+  const seen = new Set(state.chatImages.map((image) => image.key));
+  const accepted = [];
+  for (const file of selected) {
+    if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+    try {
+      const metadata = validateChatImageFile(file, [...state.chatImages, ...accepted]);
+      const key = chatImageKey(file);
+      if (seen.has(key)) {
+        rejected.push(`${metadata.name}：已选择`);
+        continue;
+      }
+      seen.add(key);
+      accepted.push({ ...metadata, file, key });
+    } catch (error) {
+      rejected.push(error.message);
+    }
+  }
+  const feedbackElement = $("#chatImageFeedback");
+  if (feedbackElement) {
+    feedbackElement.textContent = rejected.join("；");
+    feedbackElement.hidden = rejected.length === 0;
+  }
+  if (!accepted.length) return;
+  for (const image of accepted) {
+    if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const pending = { ...image, id, dataUrl: "", previewUrl: "", pending: true };
+    state.chatImages.push(pending);
+    renderChatImages();
+    try {
+      const dataUrl = await readChatImage(image.file);
+      if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+      const current = state.chatImages.find((item) => item.id === id);
+      if (!current) continue;
+      current.dataUrl = dataUrl;
+      current.previewUrl = dataUrl;
+      current.pending = false;
+      renderChatImages();
+    } catch (error) {
+      if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+      const current = state.chatImages.find((item) => item.id === id);
+      if (!current) continue;
+      state.chatImages = state.chatImages.filter((item) => item.id !== id);
+      renderChatImages();
+      showToast(chatImageReadError(error));
+    }
+  }
+}
+
+function enqueueChatImageFiles(files) {
+  const batch = [...files];
+  if (!batch.length) return;
+  const epoch = state.chatImageEpoch;
+  const sessionEpoch = state.sessionEpoch;
+  state.chatImageQueue = state.chatImageQueue
+    .catch(() => {})
+    .then(() => {
+      if (epoch !== state.chatImageEpoch || sessionEpoch !== state.sessionEpoch) return;
+      return addChatImageFiles(batch, epoch, sessionEpoch);
+    })
+    .catch(() => {});
+}
+
 function showToast(message) {
   const toast = $("#toast");
   toast.textContent = message;
@@ -133,6 +340,9 @@ async function login(password) {
 
 function resetSession(message = "") {
   state.sessionEpoch += 1;
+  state.chatAbortController?.abort();
+  state.chatAbortController = null;
+  clearChatImages();
   clearInterval(state.refreshTimer);
   state.refreshTimer = null;
   sessionStorage.removeItem("doubao_api_key");
@@ -149,6 +359,7 @@ function resetSession(message = "") {
   ["#passwordForm", "#keyForm", "#accountForm", "#importForm", "#chatForm", "#runtimeForm"].forEach((id) => $(id).reset());
   $("#chatText").textContent = "";
   $("#chatOutput").hidden = true;
+  $("#chatSubmit").disabled = false;
   $("#accountList").replaceChildren();
   $("#keyList").replaceChildren();
   $("#importJson").value = "";
@@ -245,6 +456,8 @@ function renderCatalog() {
   const models = state.config?.models || [];
   $("#catalogCount").textContent = models.length;
   $("#catalogDefault").textContent = state.config?.default_model || "—";
+  const imageCount = models.filter((model) => model.image_input === true).length;
+  $("#catalogImageCount").textContent = imageCount;
   const select = $("#chatModel");
   const previous = select.value;
   select.innerHTML = models.map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)} · ${escapeHtml(model.id)}</option>`).join("");
@@ -259,6 +472,7 @@ function renderCatalog() {
       <td>${escapeHtml([
         model.context_window ? `${Number(model.context_window).toLocaleString()} tokens 上下文` : "",
         model.reasoning_efforts?.length ? `${model.reasoning_efforts.length} 档思考` : "",
+        chatImageCapabilityLabel(model),
       ].filter(Boolean).join(" · ") || "待核实")}</td>
       <td><code>${escapeHtml(model.upstream_key)}</code></td>
     </tr>
@@ -491,6 +705,7 @@ async function scanOffline(button) {
 
 async function runChat(event) {
   event.preventDefault();
+  const sessionEpoch = state.sessionEpoch;
   const submit = $("#chatSubmit");
   const prompt = $("#chatPrompt").value.trim();
   const stream = $("#streamToggle").checked;
@@ -498,29 +713,44 @@ async function runChat(event) {
   const apiKey = $("#chatApiKey").value.trim();
   const output = $("#chatOutput");
   const text = $("#chatText");
-  if (!prompt) return showToast("请输入提示词");
+  const images = state.chatImages.map((image) => ({ ...image }));
+  if (!prompt && !images.length) return showToast("请输入提示词或选择图片");
+  if (images.some((image) => image.pending || !image.dataUrl)) return showToast("图片仍在读取，请稍候");
   if (!apiKey) return showToast("请输入用于模型测试的 API Key");
+  let content;
+  try {
+    content = chatContentParts(prompt, images);
+  } catch (error) {
+    return showToast(error.message);
+  }
   submit.disabled = true;
   output.hidden = false;
   text.textContent = "";
   $("#chatStatus").textContent = "请求中";
   $("#chatLatency").textContent = "";
   const started = performance.now();
-  const payload = { model, messages: [{ role: "user", content: prompt }], stream };
+  const payload = { model, messages: [{ role: "user", content }], stream };
   if (!$("#chatReasoning").disabled && $("#chatReasoning").value) payload.reasoning_effort = $("#chatReasoning").value;
+  const controller = new AbortController();
+  state.chatAbortController?.abort();
+  state.chatAbortController = controller;
   try {
     const response = await fetch("/v1/chat/completions", {
       method: "POST",
       credentials: "omit",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
+    if (sessionEpoch !== state.sessionEpoch) return;
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
+      if (sessionEpoch !== state.sessionEpoch) return;
       throw new Error(body?.error?.message || `HTTP ${response.status}`);
     }
     if (!stream) {
       const body = await response.json();
+      if (sessionEpoch !== state.sessionEpoch) return;
       text.textContent = body.choices?.[0]?.message?.content || "";
     } else {
       const reader = response.body.getReader();
@@ -528,6 +758,7 @@ async function runChat(event) {
       let buffer = "";
       while (true) {
         const { done, value } = await reader.read();
+        if (sessionEpoch !== state.sessionEpoch) return;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split(/\r?\n/);
@@ -545,15 +776,18 @@ async function runChat(event) {
         }
       }
     }
+    if (sessionEpoch !== state.sessionEpoch) return;
     $("#chatStatus").textContent = "完成";
     $("#chatLatency").textContent = formatDuration(performance.now() - started);
     await refresh({ silent: true });
   } catch (error) {
+    if (sessionEpoch !== state.sessionEpoch) return;
     $("#chatStatus").textContent = "失败";
     text.textContent = error.message;
     $("#chatLatency").textContent = formatDuration(performance.now() - started);
   } finally {
-    submit.disabled = false;
+    if (state.chatAbortController === controller) state.chatAbortController = null;
+    if (sessionEpoch === state.sessionEpoch) submit.disabled = false;
   }
 }
 
@@ -603,6 +837,23 @@ $("#autoRefreshButton").addEventListener("click", () => {
 });
 $("#logSearch").addEventListener("input", renderLogs);
 $("#chatForm").addEventListener("submit", runChat);
+$("#chatImageInput").addEventListener("change", (event) => {
+  feedback("#chatImageFeedback");
+  enqueueChatImageFiles(event.target.files);
+  event.target.value = "";
+});
+$("#chatImageClear").addEventListener("click", () => {
+  clearChatImages();
+  feedback("#chatImageFeedback");
+});
+$("#chatImageList").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-chat-image-remove]");
+  if (!button) return;
+  removeChatImage(button.dataset.chatImageRemove);
+});
+$("#chatImageList").addEventListener("error", (event) => {
+  if (event.target.matches(".chat-image-item img")) event.target.hidden = true;
+}, true);
 
 document.addEventListener("click", (event) => {
   const tabButton = event.target.closest("[data-tab]");

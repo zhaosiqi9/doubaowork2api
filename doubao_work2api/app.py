@@ -176,6 +176,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 context_window=item.context_window,
                 reasoning_efforts=list(item.reasoning_levels),
                 default_reasoning_effort=item.default_reasoning_effort,
+                image_input=item.image_input,
             )
             for item in MODEL_CATALOG if not allowed or item.id in allowed
         ])
