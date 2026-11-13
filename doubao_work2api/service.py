@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import time
 import uuid
@@ -27,8 +28,10 @@ from .protocol import (
     phase_markers,
     sse_data,
     upstream_payload,
+    validate_request,
 )
 from .transport import DirectTransport
+from .tool_bridge import parse_tool_response
 
 
 class ChatService:
@@ -51,32 +54,47 @@ class ChatService:
         self.default_model = default_model
         self.request_log = request_log
 
-    async def complete(self, request: ChatCompletionRequest) -> dict[str, Any]:
-        log_entry = self._start_log(request)
+    async def complete(
+        self, request: ChatCompletionRequest, *,
+        allowed_ids: set[str] | None = None, key_id: str = "",
+    ) -> dict[str, Any]:
+        validate_request(request)
+        log_entry = self._start_log(request, key_id)
         content: list[str] = []
         reasoning: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
         try:
-            async for kind, text in self._fragments_with_retry(
-                request, log_entry
+            async for kind, text in self._converted_fragments(
+                request, log_entry, allowed_ids
             ):
                 if kind == "content":
                     content.append(text)
+                elif kind == "tool_calls":
+                    tool_calls.extend(text)
                 else:
                     reasoning.append(text)
             answer = "".join(content)
-            if not answer:
+            if not answer and not tool_calls:
                 raise UpstreamError("Doubao returned an empty response.")
-            prompt_text = "".join(
-                str(message.content or "") for message in request.messages
-            )
+            prompt_text = json.dumps({
+                "messages": [message.model_dump(exclude_none=True) for message in request.messages],
+                "tools": request.tools,
+            }, ensure_ascii=False)
+            output_text = answer + "".join(reasoning)
+            if tool_calls:
+                output_text += json.dumps(tool_calls, ensure_ascii=False)
             result = completion_payload(
                 request_id=completion_id(),
                 model=request.normalized_model,
                 content=answer,
                 reasoning="".join(reasoning),
                 prompt_tokens=max(1, len(prompt_text) // 3),
-                completion_tokens=max(1, len(answer) // 3),
+                completion_tokens=max(1, len(output_text) // 3),
             )
+            if tool_calls:
+                result["choices"][0]["message"]["content"] = answer or None
+                result["choices"][0]["message"]["tool_calls"] = tool_calls
+                result["choices"][0]["finish_reason"] = "tool_calls"
             self._log_success(log_entry)
             return result
         except Exception as exc:
@@ -85,9 +103,14 @@ class ChatService:
         finally:
             self._log_interrupted(log_entry)
 
-    async def stream(self, request: ChatCompletionRequest) -> AsyncIterator[str]:
-        log_entry = self._start_log(request)
+    async def stream(
+        self, request: ChatCompletionRequest, *,
+        allowed_ids: set[str] | None = None, key_id: str = "",
+    ) -> AsyncIterator[str]:
+        validate_request(request)
+        log_entry = self._start_log(request, key_id)
         request_id = completion_id()
+        has_tools = False
         try:
             yield sse_data(
                 chunk_payload(
@@ -96,9 +119,17 @@ class ChatService:
                     role="assistant",
                 )
             )
-            async for kind, text in self._fragments_with_retry(
-                request, log_entry
+            async for kind, text in self._converted_fragments(
+                request, log_entry, allowed_ids
             ):
+                if kind == "tool_calls":
+                    has_tools = True
+                    chunk = chunk_payload(request_id=request_id, model=request.normalized_model)
+                    chunk["choices"][0]["delta"] = {
+                        "tool_calls": [dict(call, index=index) for index, call in enumerate(text)]
+                    }
+                    yield sse_data(chunk)
+                    continue
                 field = "content" if kind == "content" else "reasoning"
                 yield sse_data(
                     chunk_payload(
@@ -111,7 +142,7 @@ class ChatService:
                 chunk_payload(
                     request_id=request_id,
                     model=request.normalized_model,
-                    finish_reason="stop",
+                    finish_reason="tool_calls" if has_tools else "stop",
                 )
             )
             yield "data: [DONE]\n\n"
@@ -122,16 +153,53 @@ class ChatService:
         finally:
             self._log_interrupted(log_entry)
 
+    async def _converted_fragments(
+        self,
+        request: ChatCompletionRequest,
+        log_entry: RequestLogEntry | None,
+        allowed_ids: set[str] | None,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """Use one response conversion path for JSON and SSE clients.
+
+        Tool responses must be complete before validation. Ordinary text remains
+        incremental; tool-enabled requests buffer only their answer text.
+        """
+        tools = getattr(request, "tools", None)
+        tool_choice = getattr(request, "tool_choice", None)
+        bridge_enabled = bool(tools) and tool_choice != "none"
+        buffered: list[str] = []
+        has_answer = False
+        async for kind, text in self._fragments_with_retry(request, log_entry, allowed_ids):
+            if kind == "content" and text:
+                has_answer = True
+            if bridge_enabled and kind == "content":
+                buffered.append(text)
+            else:
+                yield kind, text
+        if bridge_enabled:
+            content, calls = parse_tool_response(
+                "".join(buffered), tools, tool_choice,
+                getattr(request, "parallel_tool_calls", True),
+            )
+            if content:
+                yield "content", content
+            if calls:
+                yield "tool_calls", calls
+            has_answer = bool(content or calls)
+        if not has_answer:
+            raise UpstreamError("Doubao returned an empty response.", code="empty_response")
+
     async def _fragments_with_retry(
         self,
         request: ChatCompletionRequest,
         log_entry: RequestLogEntry | None,
+        allowed_ids: set[str] | None = None,
     ) -> AsyncIterator[tuple[str, str]]:
         attempted: set[str] = set()
         last_error: Exception | None = None
         for _ in range(max(1, len(self.pool.accounts))):
             try:
-                account = await self.pool.acquire()
+                account = await self.pool.acquire(allowed_ids=allowed_ids)
             except NoAvailableAccountError:
                 if last_error:
                     raise last_error
@@ -156,6 +224,9 @@ class ChatService:
             except UpstreamAuthError as exc:
                 if emitted:
                     raise
+                account.last_error = exc.message
+                account.error_code = exc.code
+                account.last_error_at = time.time()
                 try:
                     await self.pool.set_enabled(account.id, False)
                 except Exception:
@@ -165,6 +236,9 @@ class ChatService:
             except UpstreamChallengeError as exc:
                 if emitted:
                     raise
+                account.last_error = exc.message
+                account.error_code = exc.code
+                account.last_error_at = time.time()
                 try:
                     await self.pool.set_enabled(account.id, False)
                 except Exception:
@@ -174,12 +248,12 @@ class ChatService:
             except UpstreamRateLimitError as exc:
                 if emitted:
                     raise
-                self.pool.mark_cooldown(account, exc.message)
+                self.pool.mark_cooldown(account, exc.message, error_code=exc.code)
                 last_error = exc
             except (UpstreamError, OSError) as exc:
                 if emitted:
                     raise
-                self.pool.mark_cooldown(account, str(exc))
+                self.pool.mark_cooldown(account, str(exc), error_code=getattr(exc, "code", "network_error"))
                 last_error = exc
             finally:
                 await self.pool.release(account)
@@ -228,14 +302,14 @@ class ChatService:
         return workspace
 
     def _start_log(
-        self, request: ChatCompletionRequest
+        self, request: ChatCompletionRequest, key_id: str = ""
     ) -> RequestLogEntry | None:
         if self.request_log is None:
             return None
         return self.request_log.start(
             model=request.normalized_model,
             stream=request.stream,
-            meta={"messages": len(request.messages)},
+            meta={"messages": len(request.messages), "key_id": key_id},
         )
 
     def _log_success(self, entry: RequestLogEntry | None) -> None:

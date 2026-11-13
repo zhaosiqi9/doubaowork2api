@@ -7,7 +7,222 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .catalog import (
+    REASONING_EFFORT_BY_LEVEL,
+    REASONING_LEVELS,
+    ModelSpec,
+    find_model,
+)
+from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
+
+
+class RequestValidationError(GatewayError):
+    status_code = 400
+    error_type = "invalid_request_error"
+    code = "unsupported_parameter"
+
+
+class UnsupportedContentError(GatewayError):
+    status_code = 400
+    error_type = "invalid_request_error"
+    code = "unsupported_content"
+
+
+_UNSUPPORTED_PARAMETERS = (
+    "max_tokens",
+    "max_completion_tokens",
+    "temperature",
+    "top_p",
+    "stop",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "response_format",
+    "logprobs",
+    "top_logprobs",
+    "n",
+)
+_REASONING_INTEGER_RANGE = range(3, 8)
+_MAX_PROMPT_CONTEXT_ITEMS = 100_000
+
+
+def _request_field(request: ChatCompletionRequest, name: str) -> Any:
+    extras = getattr(request, "__pydantic_extra__", None)
+    if isinstance(extras, dict) and name in extras:
+        return extras[name]
+    return getattr(request, name, None)
+
+
+def _is_explicit(request: ChatCompletionRequest, name: str) -> bool:
+    if name in getattr(request, "model_fields_set", set()):
+        return _request_field(request, name) is not None
+    extras = getattr(request, "__pydantic_extra__", None)
+    return (
+        isinstance(extras, dict)
+        and name in extras
+        and extras[name] is not None
+    )
+
+
+def _request_tools(request: ChatCompletionRequest) -> Any:
+    tools = _request_field(request, "tools")
+    return tools if tools is not None else []
+
+
+def _tool_bridge():
+    try:
+        from . import tool_bridge
+    except ImportError as exc:
+        raise RequestValidationError(
+            "Tool support is not available in this gateway build.",
+            code="unsupported_parameter",
+        ) from exc
+    return tool_bridge
+
+
+def _validate_tools(request: ChatCompletionRequest) -> None:
+    tools = _request_tools(request)
+    tool_choice = _request_field(request, "tool_choice")
+    parallel_tool_calls = _parallel_tool_calls(request)
+    if tools or tool_choice is not None or _has_tool_history(request.messages):
+        _tool_bridge().validate_tools(
+            tools, tool_choice, parallel_tool_calls
+        )
+
+
+def _parallel_tool_calls(request: ChatCompletionRequest) -> bool:
+    value = _request_field(request, "parallel_tool_calls")
+    return True if value is None else value
+
+
+def _has_tool_history(messages: list[ChatMessage]) -> bool:
+    for message in messages:
+        if message.role == "tool" or _request_field(message, "tool_calls"):
+            return True
+    return False
+
+
+def _validate_content(request: ChatCompletionRequest) -> None:
+    count = 0
+    for message in request.messages:
+        content = message.content
+        if content is None:
+            continue
+        if isinstance(content, str):
+            count += 1
+        elif isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    raise UnsupportedContentError(
+                        "Message content parts must be objects."
+                    )
+                if part.get("type") not in {"text", "input_text"}:
+                    kind = part.get("type")
+                    raise UnsupportedContentError(
+                        f"Unsupported message content type: {kind!r}. "
+                        "Only text and input_text content are supported."
+                    )
+                if not isinstance(part.get("text"), str):
+                    raise UnsupportedContentError(
+                        "Text content parts must include a string 'text' value."
+                    )
+                count += 1
+        else:
+            raise UnsupportedContentError(
+                "Message content must be a string or a list of content parts."
+            )
+        if count > _MAX_PROMPT_CONTEXT_ITEMS:
+            raise RequestValidationError(
+                "Request contains too many message content parts."
+            )
+
+
+def _resolve_model(request: ChatCompletionRequest) -> ModelSpec | None:
+    return find_model(request.normalized_model)
+
+
+def resolve_reasoning_effort(request: ChatCompletionRequest) -> int:
+    spec = _resolve_model(request)
+    if spec is None:
+        if _is_explicit(request, "reasoning_effort"):
+            value = _request_field(request, "reasoning_effort")
+            if isinstance(value, int) and not isinstance(value, bool):
+                if value in _REASONING_INTEGER_RANGE:
+                    return value
+            raise RequestValidationError(
+                "reasoning_effort requires a recognized model.",
+                code="invalid_reasoning_effort",
+            )
+        return 7
+
+    explicit = _is_explicit(request, "reasoning_effort")
+    value = _request_field(request, "reasoning_effort")
+    if not explicit:
+        if spec.default_reasoning_effort:
+            return REASONING_EFFORT_BY_LEVEL[spec.default_reasoning_effort]
+        return 7
+
+    if isinstance(value, str):
+        if value in spec.reasoning_levels:
+            return REASONING_EFFORT_BY_LEVEL[value]
+    elif isinstance(value, int) and not isinstance(value, bool):
+        if value in _REASONING_INTEGER_RANGE:
+            level = REASONING_LEVELS[value - 3]
+            if level in spec.reasoning_levels:
+                return value
+
+    if not spec.reasoning_levels:
+        raise RequestValidationError(
+            f"Model {spec.id!r} does not support reasoning_effort.",
+            code="unsupported_parameter",
+        )
+    raise RequestValidationError(
+        f"Unsupported reasoning_effort for model {spec.id!r}. "
+        "Supported values are low, medium, high, xhigh, max "
+        "and integers 3 through 7.",
+        code="invalid_reasoning_effort",
+    )
+
+
+def validate_request(request: ChatCompletionRequest) -> None:
+    model = request.model
+    if not isinstance(model, str) or not model.strip():
+        raise RequestValidationError(
+            "model must be a non-empty string.",
+            code="invalid_model",
+        )
+    spec = find_model(model)
+    if spec is None:
+        from .errors import UnknownModelError
+
+        raise UnknownModelError(model)
+
+    for name in _UNSUPPORTED_PARAMETERS:
+        if _is_explicit(request, name):
+            raise RequestValidationError(
+                f"{name} is not supported by the Doubao Work upstream.",
+                code="unsupported_parameter",
+            )
+
+    _validate_content(request)
+    _validate_tools(request)
+    for message in request.messages:
+        render_tool_history(message)
+    resolve_reasoning_effort(request)
+
+
+def render_tool_history(message: ChatMessage) -> str | None:
+    if message.role != "tool" and not _request_field(message, "tool_calls"):
+        return None
+    bridge = _tool_bridge()
+    render = getattr(bridge, "render_tool_history", None)
+    if not callable(render):
+        raise RequestValidationError(
+            "Tool history support is not available in this gateway build.",
+            code="unsupported_parameter",
+        )
+    return render(message)
 
 
 def text_content(message: ChatMessage) -> str:
@@ -28,7 +243,12 @@ def render_prompt(messages: list[ChatMessage]) -> str:
     systems: list[str] = []
     dialogue: list[str] = []
     for message in messages:
+        rendered_history = render_tool_history(message)
         content = text_content(message)
+        if message.role == "tool":
+            content = rendered_history or ""
+        elif rendered_history is not None:
+            content = "\n\n".join(item for item in (content, rendered_history) if item)
         if not content:
             continue
         if message.role in {"system", "developer"}:
@@ -59,9 +279,30 @@ def upstream_payload(
     device_name: str,
     app_id: str,
     device_id: str,
-    reasoning_effort: int = 7,
+    reasoning_effort: int | None = None,
 ) -> dict[str, Any]:
+    validate_request(request)
+    spec = find_model(request.normalized_model)
+    if spec is None:
+        raise RequestValidationError(
+            "model must be resolved before building an upstream payload.",
+            code="invalid_model",
+        )
     prompt = render_prompt(request.messages)
+    tools = _request_tools(request)
+    if tools:
+        instructions = _tool_bridge().render_tool_instructions(
+            tools,
+            _request_field(request, "tool_choice"),
+            _parallel_tool_calls(request),
+        )
+        if instructions:
+            prompt = f"System instructions:\n{instructions}\n\n{prompt}"
+    resolved_effort = (
+        resolve_reasoning_effort(request)
+        if reasoning_effort is None
+        else reasoning_effort
+    )
     conversation_id = (request.conversation_id or "").strip()
     need_create = not conversation_id or conversation_id == "0"
     local_message_id = str(uuid.uuid4())
@@ -95,7 +336,7 @@ def upstream_payload(
     general_json = json.dumps(
         general_task_param, ensure_ascii=False, separators=(",", ":")
     )
-    return {
+    payload = {
         "client_meta": {
             "local_conversation_id": (
                 f"local_{uuid.uuid4().hex[:16]}" if need_create else ""
@@ -160,7 +401,7 @@ def upstream_payload(
             "conversation_init_ext": {
                 "agent_task_param": task_json,
                 "model_item_key": model_key,
-                "reasoning_effort": str(reasoning_effort),
+                "reasoning_effort": str(resolved_effort),
                 "mode_id": "3",
             },
             "regen_query_id": [],
@@ -185,11 +426,7 @@ def upstream_payload(
             "connector_info_list": [],
             "model_config": {
                 "model_item_key": model_key,
-                "model_extra_params": {
-                    "memory_profile": "300k_230",
-                    "total_window_size": "300000",
-                },
-                "reasoning_effort": reasoning_effort,
+                "reasoning_effort": resolved_effort,
             },
             "aggregate_params": {
                 "mention_skill_list": "[]",
@@ -199,7 +436,7 @@ def upstream_payload(
                 "mode_id": "3",
                 "model_item_key": model_key,
                 "agent_mode": "1",
-                "reasoning_effort": str(reasoning_effort),
+                "reasoning_effort": str(resolved_effort),
                 "provider_id": "",
             },
         },
@@ -219,6 +456,12 @@ def upstream_payload(
             "commerce_credit_config_enable": "0",
         },
     }
+    if spec.has_verified_memory_profile:
+        payload["option"]["model_config"]["model_extra_params"] = {
+            "memory_profile": spec.memory_profile,
+            "total_window_size": str(spec.context_window),
+        }
+    return payload
 
 
 def completion_id() -> str:

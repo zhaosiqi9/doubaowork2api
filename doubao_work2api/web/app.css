@@ -347,6 +347,7 @@ textarea { resize: vertical; line-height: 1.55; }
 .log-status.error { color: var(--red); }
 .log-status.running { color: var(--amber); }
 
+#modelCatalog { margin-top: 24px; }
 .catalog-summary { display: grid; grid-template-columns: 1.3fr 1.3fr 1fr 1fr; margin-bottom: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); }
 .catalog-summary div { display: flex; flex-direction: column; gap: 5px; padding: 15px 18px; }
 .catalog-summary div + div { border-left: 1px solid var(--line); }
@@ -487,4 +488,60 @@ td code { font-size: 10.5px; }
   .env-grid > * { border-bottom: 0; }
   .env-grid span { padding-top: 0; }
   .detail-list div, .settings-list div { grid-template-columns: 80px minmax(0, 1fr); }
+}
+
+/* Management forms follow the existing panel, color and spacing system. */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.form-stack { display: grid; gap: 14px; margin-top: 18px; }
+.form-stack > .button { justify-self: start; }
+.field > span { font-size: 12px; letter-spacing: 0.01em; line-height: 1.5; }
+.field input, .field select { min-height: 44px; }
+.field textarea { font-size: 14px; }
+.form-feedback { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-soft); color: var(--fg); font-size: 13px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.form-feedback.is-error { color: var(--red); border: 1px solid currentColor; }
+.filter-grid { display: grid; grid-template-columns: minmax(200px, 2fr) repeat(3, minmax(120px, 1fr)); gap: 12px; align-items: end; }
+.selection-toolbar { display: grid; gap: 12px; margin: 16px 0; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.selection-toolbar p { margin: 0; font-size: 12px; }
+.selection-toolbar .button, .pagination .button, .dialog .button, .settings-panel .button, .account-actions .button { min-height: 44px; font-size: 12px; }
+.button.danger { background: var(--red-soft); color: var(--red); border-color: currentColor; }
+.button.danger:hover { background: var(--red-soft); filter: brightness(0.94); }
+.button.primary.danger { box-shadow: none; }
+.button:disabled { cursor: not-allowed; }
+.button[aria-busy="true"] { cursor: progress; }
+.account-actions { flex-wrap: wrap; justify-content: flex-end; }
+.account-card { align-items: start; }
+.account-remark { margin: 8px 0 0; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.check-label { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; font-size: 13px; overflow-wrap: anywhere; }
+.check-label input { width: 20px; height: 20px; flex: 0 0 20px; padding: 0; accent-color: var(--accent); }
+.account-title .check-label { min-width: 0; }
+.selector-field { border: 1px solid var(--line); border-radius: 10px; min-width: 0; padding: 12px; }
+.selector-field legend { font-weight: 600; padding: 0 5px; }
+.check-options { display: grid; gap: 4px; max-height: 230px; overflow: auto; }
+.check-options .check-label { padding: 3px 6px; border-radius: 6px; }
+.check-options .check-label:hover { background: var(--panel-soft); }
+.key-list { display: grid; gap: 12px; }
+.key-list .account-meta { font-size: 11px; }
+.pagination { justify-content: flex-end; margin-top: 16px; font-size: 12px; }
+#newKeySecret { font-family: var(--mono); font-size: 14px; }
+.dialog .icon-button { width: 44px; height: 44px; flex-basis: 44px; }
+.dialog form > .muted, .dialog .form-stack > p { font-size: 13px; }
+.dialog { overscroll-behavior: contain; }
+@media (max-width: 1100px) {
+  .filter-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 620px) {
+  .filter-grid { grid-template-columns: 1fr; }
+  .selection-toolbar .button-row { gap: 8px; }
+  .selection-toolbar .button { flex: 1 1 130px; }
+  .account-actions { justify-content: flex-start; gap: 8px; }
+  .key-list .account-card { grid-template-columns: 1fr; }
+  .field input, .field select, .field textarea { font-size: 16px; }
+  .panel-heading { flex-wrap: wrap; }
+  .dialog { padding: 18px; max-height: calc(100dvh - 24px); }
+  .dialog-actions { flex-wrap: wrap; }
+  .dialog-actions .button { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

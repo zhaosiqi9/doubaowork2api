@@ -4,7 +4,7 @@
 账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包上游，不需要持续
 运行豆包工作电脑版、浏览器或 Windows 桌面。
 
-当前版本：`0.1.0`。这是文本 Chat Completions 的首个公开版本，不包含图片、
+当前版本：`0.2.0`。支持文本 Chat Completions 与工具调用文本桥接，不包含图片、
 视频或其他媒体接口。
 
 ## MVP 功能
@@ -16,8 +16,13 @@
 - `Authorization: Bearer <key>` / `x-api-key` 鉴权
 - 多账号轮换；401/403 禁用账号，429/5xx 临时冷却
 - 账号文件只从本地 `accounts/` 读取
-- 同源新版 WebUI：总览、网关、账号、用量、设置、日志
+- 同源新版 WebUI：总览（含模型清单）、账号、用量、设置、日志
+- 独立管理密码与管理会话，多 API Key、账号/模型白名单和 Key 并发上限
+- 账号搜索、状态/分组/错误码筛选，多选导出、删除、启停和分组
+- 每账号独立 HTTP 会话与 Cookie 容器，导入更新保留管理信息
 - 模型目录与豆包上游 `model_item_key` 分离映射
+- 工具定义、工具选择及工具结果历史转换；流式与非流式返回 OpenAI `tool_calls`
+- DeepSeek Flash 五档思考强度映射，总览展示已核实的模型能力
 
 ## 模型目录
 
@@ -83,6 +88,7 @@ Playwright 不属于正式运行依赖，也不会随基础安装或 wheel 安�
 cd doubaowork2api
 python -m pip install -e .
 $env:DOUBAO_WORK_API_KEY = "sk-your-key"
+$env:DOUBAO_WORK_ADMIN_PASSWORD = "your-admin-password"
 python -m doubao_work2api
 ```
 
@@ -90,16 +96,21 @@ python -m doubao_work2api
 
 ```bash
 python3 -m pip install -e .
-DOUBAO_WORK_HOST=0.0.0.0 DOUBAO_WORK_API_KEY='sk-your-key' python3 -m doubao_work2api
+DOUBAO_WORK_HOST=0.0.0.0 DOUBAO_WORK_API_KEY='sk-your-key' DOUBAO_WORK_ADMIN_PASSWORD='your-admin-password' python3 -m doubao_work2api
 ```
 
 公网部署必须放在带 TLS 和访问控制的反向代理之后，并且不要暴露账号目录。
 
-浏览器打开 `http://127.0.0.1:18789/`，输入 `DOUBAO_WORK_API_KEY` 即可进入
-控制台。控制台支持：
+浏览器打开 `http://127.0.0.1:18789/`，输入独立的管理密码进入控制台。
+首次初始化取 `DOUBAO_WORK_ADMIN_PASSWORD`，未设置时为 `admin`，请在设置中修改。
+API Key 仅用于模型接口，不能登录面板或操作账号。控制台支持：
 
 - 粘贴单个/多个账号 JSON，或一次选择多个 JSON 文件导入
-- 账号启用、停用、解除冷却
+- 账号昵称、备注、分组、筛选，以及对勾选账号批量启停、删除、分组和解除冷却
+- 按选择范围导出完整账号 JSON，再通过导入恢复；导出文件包含登录凭证
+- 多 API Key 管理；密钥创建时仅显示一次，列表和配置文件不保存明文 Key
+- 为 Key 绑定账号、模型和并发上限；模型清单和实际请求执行相同的模型限制
+- 保存默认模型、请求超时和故障冷却；修改管理密码后所有管理会话失效
 - 查看设备标识摘要、冷却剩余时间和最近错误
 - 查看模型目录与上游映射
 - 直接发起普通或流式模型测试
@@ -127,6 +138,25 @@ curl http://127.0.0.1:18789/v1/chat/completions \
   }'
 ```
 
+## 工具调用与思考强度
+
+`POST /v1/chat/completions` 支持 OpenAI `tools`（`type: "function"`）、
+`tool_choice`（`auto`、`none`、`required` 或指定函数）与 `parallel_tool_calls`。
+工具定义会转换为提示词，模型按约定输出结构化文本后，网关校验并返回
+`message.tool_calls` 和 `finish_reason: "tool_calls"`。工具由调用方执行，
+随后以 `role: "tool"`、`tool_call_id` 回传；网关保留调用 ID、名称和参数历史。
+这属于文本桥接，效果取决于模型遵循约定的能力，不等同于上游原生工具协议。
+工具请求的答案先缓冲校验后再发送 SSE；普通文本请求仍即时增量返回。
+
+DeepSeek Flash 可传 `"reasoning_effort": "low"`、`"medium"`、`"high"`、
+`"xhigh"`、`"max"`，分别映射官方档位 `3 / 4 / 5 / 6 / 7`，不传时使用
+默认最高档。其他模型的可配置档位尚未核实，显式请求时会明确报错。
+
+DeepSeek Flash 的总上下文窗口由官方配置及真实响应确认是 **300,000 tokens**。
+系统提示和历史也占用窗口；独立最大输入、最大输出尚未核实。
+图片上传未实现，非文本输入会明确报错；未支持的生成控制参数也不会被静默忽略。
+用量中的 token 数仍为本地估算，不能用于精确计费。
+
 ## 配置
 
 | 环境变量 | 默认值 | 说明 |
@@ -134,10 +164,19 @@ curl http://127.0.0.1:18789/v1/chat/completions \
 | `DOUBAO_WORK_HOST` | `127.0.0.1` | 监听地址 |
 | `DOUBAO_WORK_PORT` | `18789` | 监听端口 |
 | `DOUBAO_WORK_API_KEY` | `sk-local-change-me` | 网关 API Key |
+| `DOUBAO_WORK_ADMIN_PASSWORD` | `admin` | 首次初始化管理密码，与 API Key 独立 |
 | `DOUBAO_WORK_ACCOUNTS_DIR` | `accounts` | 账号 JSON 目录 |
 | `DOUBAO_WORK_DATA_DIR` | `data` | 工作区等运行时数据 |
 | `DOUBAO_WORK_TIMEOUT` | `180` | 单次上游请求超时秒数 |
 | `DOUBAO_WORK_COOLDOWN_SECONDS` | `60` | 限流/故障冷却秒数 |
+
+设置保存在 `data/settings.json`。首次初始化时环境变量中的 API Key 会导入为
+默认 Key；后续以持久化设置为准，停用或删除后不会因重启恢复。
+默认模型、超时、冷却在面板保存后生效并在重启后保留；有上游请求运行时先等待完成再保存。
+端口、目录和上游地址仍由环境变量配置并在重启后生效。
+
+模型测试需要单独填写 API Key。管理会话仅用于 `/admin/*`，不授予模型调用权限。
+导入导出、管理设置和 API Key 限制适用于单进程部署；多实例不要共用可写账号/设置目录。
 
 ## 协议验证
 
@@ -162,11 +201,17 @@ SSE 流。
 - `seed-lite-7b` 经本网关返回 `SEED_SMOKE_OK`
 - 两条请求均由同一个已启用账号完成，并写入正确模型名的请求日志
 
+0.2.0 补充实测：
+
+- 指定 `lookup_test_value` 合成函数和 `{"key":"ALPHA"}` 参数，真实上游经转换后返回标准 `tool_calls`。
+- 回传合成工具结果后，流式响应正确输出 `BRIDGE_020_OK` 并以 `[DONE]` 结束。
+- DeepSeek Flash 五档思考参数均可完成请求；这不代表已测出各档推理质量的差异。
+
 ## 安全与限制
 
 - 本项目的账号文件包含登录凭证，按密码级别保护。
 - 「离线扫描」只在用户点击时读取本机豆包客户端的 Cookie 数据库和 Local
   Storage，使用当前 Windows 用户的 DPAPI 解密，数据只写入本地 `accounts/`；
   不会上传到第三方。运行时不需要豆包客户端常驻，也不内置签名算法。
-- 上游协议、模型键和风控可能变化；当前只实现文本 Chat Completions。
+- 上游协议、模型键和风控可能变化；当前实现文本 Chat Completions 和工具调用文本桥接。
 - `usage` 为本地估算，不是上游真实 token 账单。

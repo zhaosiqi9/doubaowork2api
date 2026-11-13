@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .errors import UnknownModelError
+
+
+REASONING_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+REASONING_EFFORT_BY_LEVEL: dict[str, int] = {
+    "low": 3,
+    "medium": 4,
+    "high": 5,
+    "xhigh": 6,
+    "max": 7,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,16 +24,29 @@ class ModelSpec:
     mode: str = "work"
     price: str = ""
     description: str = ""
+    context_window: int | None = None
+    reasoning_levels: tuple[str, ...] = ()
+    default_reasoning_effort: str | None = None
+    memory_profile: str | None = None
 
-    def public_dict(self) -> dict[str, str]:
-        return {
+    def public_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "upstream_key": self.upstream_key,
             "mode": self.mode,
             "price": self.price,
             "description": self.description,
+            "context_window": self.context_window,
+            "reasoning_efforts": list(self.reasoning_levels),
         }
+        if self.default_reasoning_effort is not None:
+            result["default_reasoning_effort"] = self.default_reasoning_effort
+        return result
+
+    @property
+    def has_verified_memory_profile(self) -> bool:
+        return self.memory_profile is not None and self.context_window is not None
 
 
 # 公开模型名保持稳定；上游键取自豆包工作电脑版的模型菜单。
@@ -34,6 +58,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-deepseek-v4-1-flash-261017",
         price="0.01x",
         description="默认模型，豆包工作对话入口。",
+        context_window=300_000,
+        reasoning_levels=REASONING_LEVELS,
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="seed-lite-7b",

@@ -22,8 +22,8 @@
     <form id="loginForm" class="login-card">
       <span class="eyebrow">AUTHENTICATION</span>
       <h2>进入控制台</h2>
-      <p>输入启动服务时配置的 <code>DOUBAO_WORK_API_KEY</code>。</p>
-      <label class="field"><span>API KEY</span><input id="loginKey" type="password" autocomplete="current-password" placeholder="sk-..." required></label>
+      <p>输入管理员密码。登录会话通过本机 Cookie 保存。</p>
+      <label class="field"><span>管理员密码</span><input id="loginPassword" name="password" type="password" autocomplete="current-password" required></label>
       <p id="loginError" class="form-error" role="alert" hidden></p>
       <button class="button primary wide" type="submit">连接网关 <span>→</span></button>
     </form>
@@ -39,9 +39,6 @@
       <nav class="nav">
         <button type="button" class="nav-item" data-tab="overview">
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>总览</span>
-        </button>
-        <button type="button" class="nav-item" data-tab="gateway">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span>网关</span>
         </button>
         <button type="button" class="nav-item" data-tab="accounts">
           <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c.4-3.2 2.4-5 5.5-5s5.1 1.8 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.5c2.7.2 4.3 1.8 4.8 4.5"/></svg><span>账号</span>
@@ -107,13 +104,15 @@
                   <div><dt>Base URL</dt><dd><code id="baseUrl">/v1</code></dd></div>
                   <div><dt>默认模型</dt><dd><code id="defaultModel">deepseek-v4.1-flash</code></dd></div>
                   <div><dt>鉴权</dt><dd>Bearer / x-api-key</dd></div>
-                  <div><dt>当前 Key</dt><dd><code id="maskedKey">未配置</code></dd></div>
+                  <div><dt>控制台鉴权</dt><dd>管理员 Cookie 会话</dd></div>
                 </dl>
               </section>
               <section class="panel test-panel">
                 <div class="panel-heading compact"><div><span class="eyebrow">SMOKE TEST</span><h2>模型测试</h2></div><span class="badge ok">实时上游</span></div>
                 <form id="chatForm">
+                  <label class="field"><span>测试 API Key（仅用于此请求）</span><input id="chatApiKey" type="password" autocomplete="off" spellcheck="false" required></label>
                   <label class="field"><span>模型</span><select id="chatModel"></select></label>
+                  <label class="field"><span>思考强度</span><select id="chatReasoning"><option value="">上游默认</option></select></label>
                   <label class="field"><span>提示词</span><textarea id="chatPrompt" rows="4" placeholder="只回复 OK">只回复 OK</textarea></label>
                   <label class="switch-row"><span><strong>流式返回</strong><small>观察 SSE 增量输出</small></span><input id="streamToggle" type="checkbox"></label>
                   <button class="button primary wide" type="submit" id="chatSubmit">发送测试请求</button>
@@ -125,11 +124,9 @@
               </section>
             </aside>
           </div>
-        </section>
-
-        <section id="page-gateway" class="page">
+          <section id="modelCatalog" aria-label="模型清单">
           <div class="page-intro">
-            <div><span class="eyebrow">MODEL CATALOG</span><h2>网关模型清单</h2><p>对外模型名与豆包上游内部键分离；未知模型不会被静默改写。</p></div>
+            <div><span class="eyebrow">MODEL CATALOG</span><h2>模型清单</h2><p>对外模型名与豆包上游内部键分离；未知模型不会被静默改写。</p></div>
             <button type="button" class="button secondary" data-action="refresh">刷新目录</button>
           </div>
           <div class="catalog-summary">
@@ -141,14 +138,15 @@
           <section class="panel">
             <div class="panel-heading"><div><span class="eyebrow">ROUTING TABLE</span><h2>模型与上游映射</h2></div><span class="muted small">/v1/models 同源</span></div>
             <div class="table-wrap">
-              <table class="catalog-table"><thead><tr><th>状态</th><th>对外模型</th><th>显示名称</th><th>倍率</th><th>上游 model_item_key</th></tr></thead><tbody id="catalogRows"></tbody></table>
+              <table class="catalog-table"><thead><tr><th>状态</th><th>对外模型</th><th>显示名称</th><th>倍率</th><th>已核实能力</th><th>上游 model_item_key</th></tr></thead><tbody id="catalogRows"></tbody></table>
             </div>
+          </section>
           </section>
         </section>
 
         <section id="page-accounts" class="page">
           <div class="page-intro">
-            <div><span class="eyebrow">ACCOUNT POOL</span><h2>账号池</h2><p>Cookie 只在本地保存，面板只显示设备标识摘要。</p></div>
+            <div><span class="eyebrow">ACCOUNT POOL</span><h2>账号池</h2><p>列表显示账号摘要；仅点击导出时下载含凭证的账号文件。</p></div>
             <div class="button-row"><button type="button" class="button secondary" data-action="scan-offline" title="读取本机客户端数据，需先关闭客户端">离线扫描</button><button type="button" class="button primary" data-action="open-import">导入账号</button></div>
           </div>
           <div class="metric-grid compact-grid">
@@ -158,9 +156,22 @@
             <article class="metric-card"><span>停用</span><strong id="accountMetricDisabled">0</strong><small>不会接单</small></article>
           </div>
           <section class="panel">
-            <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><span class="muted small">凭证不下发浏览器</span></div>
+            <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><span class="muted small">列表不含凭证</span></div>
+            <div class="filter-grid">
+              <label class="field"><span>搜索名称 / ID / 备注 / 分组 / 错误</span><input id="accountSearch" type="search"></label>
+              <label class="field"><span>状态</span><select id="accountStatus"><option value="">全部状态</option><option value="ready">可用</option><option value="busy">请求中</option><option value="cooling">冷却中</option><option value="disabled">已停用</option></select></label>
+              <label class="field"><span>分组</span><select id="accountGroup"><option value="">全部分组</option></select></label>
+              <label class="field"><span>错误码</span><select id="accountErrorCode"><option value="">全部错误码</option></select></label>
+            </div>
+            <div class="selection-toolbar">
+              <div class="button-row"><button type="button" class="button secondary" data-action="select-visible">选择当前页</button><button type="button" class="button secondary" data-action="select-results">选择全部筛选结果</button><button type="button" class="button ghost" data-action="clear-selection">清空选择</button></div>
+              <p id="selectionSummary" class="muted" role="status"></p>
+              <div class="button-row" id="batchActions"><button type="button" class="button secondary" data-batch="export">导出所选</button><button type="button" class="button secondary" data-batch="enable">启用</button><button type="button" class="button secondary" data-batch="disable">停用</button><button type="button" class="button secondary" data-batch="clear-cooldown">清除冷却</button><button type="button" class="button secondary" data-batch="group">修改分组</button><button type="button" class="button danger" data-batch="delete">删除</button></div>
+              <p id="batchFeedback" class="form-feedback" role="status" hidden></p>
+            </div>
             <div id="accountList" class="account-list"></div>
             <div id="accountEmpty" class="empty-state" hidden><strong>还没有账号</strong><p>先登录一次豆包工作电脑版并退出，然后点「离线扫描」；也可导入账号 JSON。</p></div>
+            <div class="pagination button-row"><button type="button" class="button ghost" id="accountsPrevious">上一页</button><span id="accountsPage" aria-live="polite"></span><button type="button" class="button ghost" id="accountsNext">下一页</button></div>
           </section>
         </section>
 
@@ -193,46 +204,53 @@
 
         <section id="page-settings" class="page">
           <div class="page-intro">
-            <div><span class="eyebrow">SETTINGS</span><h2>设置与运行信息</h2><p>0.1.0 采用环境变量配置；此页只读展示，修改后重启网关生效。</p></div>
+            <div><span class="eyebrow">SETTINGS</span><h2>设置与运行信息</h2><p>保存运行配置、管理 API Key 与管理员密码。</p></div>
             <button type="button" class="button secondary" data-action="refresh">重新读取</button>
           </div>
           <div class="settings-layout">
             <section class="panel settings-panel">
-              <div class="panel-heading"><div><span class="eyebrow">RUNTIME</span><h2>运行配置</h2></div><span class="badge ok">只读</span></div>
+              <div class="panel-heading"><div><span class="eyebrow">RUNTIME</span><h2>运行配置</h2></div><span class="badge ok">可保存</span></div>
               <dl class="settings-list">
                 <div><dt>监听地址</dt><dd><code id="settingListen">—</code></dd></div>
                 <div><dt>上游地址</dt><dd><code id="settingUpstream">—</code></dd></div>
-                <div><dt>默认模型</dt><dd><code id="settingDefaultModel">—</code></dd></div>
-                <div><dt>请求超时</dt><dd id="settingTimeout">—</dd></div>
-                <div><dt>故障冷却</dt><dd id="settingCooldown">—</dd></div>
                 <div><dt>账号目录</dt><dd><code id="settingAccountsDir">—</code></dd></div>
               </dl>
+              <form id="runtimeForm" class="form-stack">
+                <label class="field"><span>默认模型</span><select id="settingDefaultModel" required></select></label>
+                <label class="field"><span>请求超时（秒，大于 0）</span><input id="settingTimeout" type="number" min="0.1" step="any" required></label>
+                <label class="field"><span>故障冷却（秒，0 表示不冷却）</span><input id="settingCooldown" type="number" min="0" step="any" required></label>
+                <p id="runtimeFeedback" class="form-feedback" role="status" hidden></p>
+                <button type="submit" class="button primary">保存运行配置</button>
+              </form>
             </section>
             <section class="panel settings-panel">
               <div class="panel-heading"><div><span class="eyebrow">SECURITY</span><h2>安全边界</h2></div></div>
               <div class="security-note">
                 <strong>凭证只写入本机 <code>accounts/</code></strong>
-                <p>控制台不返回 Cookie，浏览器也拿不到账号凭证。公网部署请使用 TLS、访问控制和反向代理，不要直接暴露本服务。</p>
+                <p>管理员使用 HttpOnly Cookie 会话；API Key 用于模型请求。账号导出文件含凭证，请妥善保管。</p>
               </div>
+              <form id="passwordForm" class="form-stack">
+                <label class="field"><span>当前管理员密码</span><input id="currentPassword" type="password" autocomplete="current-password" required></label>
+                <label class="field"><span>新管理员密码</span><input id="newPassword" type="password" autocomplete="new-password" required></label>
+                <label class="field"><span>确认新密码</span><input id="confirmPassword" type="password" autocomplete="new-password" required></label>
+                <p class="muted small">修改后所有管理会话失效，需要重新登录。</p>
+                <p id="passwordFeedback" class="form-feedback" role="status" hidden></p>
+                <button type="submit" class="button primary">修改密码并退出</button>
+              </form>
               <div class="settings-actions"><button type="button" class="button secondary" data-action="logout">退出当前会话</button><a class="button secondary" href="/docs" target="_blank" rel="noopener noreferrer">OpenAPI 文档</a></div>
             </section>
           </div>
           <section class="panel">
-            <div class="panel-heading"><div><span class="eyebrow">ENVIRONMENT</span><h2>可用环境变量</h2></div></div>
-            <div class="env-grid">
-              <code>DOUBAO_WORK_API_KEY</code><span>网关访问密钥</span>
-              <code>DOUBAO_WORK_ACCOUNTS_DIR</code><span>账号 JSON 目录</span>
-              <code>DOUBAO_WORK_DEFAULT_MODEL</code><span>默认模型</span>
-              <code>DOUBAO_WORK_TIMEOUT</code><span>上游超时秒数</span>
-              <code>DOUBAO_WORK_COOLDOWN_SECONDS</code><span>故障冷却秒数</span>
-            </div>
+            <div class="panel-heading"><div><span class="eyebrow">API KEYS</span><h2>API Key 管理</h2></div><button type="button" class="button primary" data-action="create-key">创建 API Key</button></div>
+            <p class="muted small">可限制模型、账号及并发数。完整密钥仅创建时显示一次。</p>
+            <div id="keyList" class="key-list"></div><p id="keysEmpty" class="muted" hidden>尚无 API Key，请创建。</p>
           </section>
         </section>
 
         <section id="page-logs" class="page">
           <div class="page-intro">
             <div><span class="eyebrow">REQUEST TRACE</span><h2>请求日志</h2><p>仅记录时间、模型、账号、状态与耗时，不记录提示词、响应正文和 Cookie。</p></div>
-            <div class="button-row"><input id="logSearch" class="search-input" type="search" placeholder="搜索模型 / 账号 / 错误"><button type="button" class="button secondary" data-action="refresh">刷新</button></div>
+            <div class="button-row"><label class="field"><span>搜索请求日志</span><input id="logSearch" class="search-input" type="search" placeholder="模型 / 账号 / 错误"></label><button type="button" class="button secondary" data-action="refresh">刷新</button></div>
           </div>
           <section class="panel logs-panel">
             <div class="panel-heading"><div><span class="eyebrow">LIVE WINDOW</span><h2>最近 200 条</h2></div><span class="badge" id="logCountBadge">0 条</span></div>
@@ -246,20 +264,61 @@
 
   <nav id="mobileNav" class="mobile-nav" aria-label="手机导航">
     <button class="mobile-nav-item active" data-tab="overview"><span>总览</span></button>
-    <button class="mobile-nav-item" data-tab="gateway"><span>网关</span></button>
     <button class="mobile-nav-item" data-tab="accounts"><span>账号</span></button>
     <button class="mobile-nav-item" data-tab="analytics"><span>用量</span></button>
     <button class="mobile-nav-item" data-tab="settings"><span>设置</span></button>
+    <button class="mobile-nav-item" data-tab="logs"><span>日志</span></button>
   </nav>
 
-  <dialog id="importDialog" class="dialog">
+  <dialog id="importDialog" class="dialog" aria-labelledby="importTitle">
     <form id="importForm" method="dialog">
-      <div class="dialog-heading"><div><span class="eyebrow">ACCOUNT INGEST</span><h2>导入账号</h2></div><button type="button" class="icon-button" data-action="close-import" aria-label="关闭">×</button></div>
+      <div class="dialog-heading"><div><span class="eyebrow">ACCOUNT INGEST</span><h2 id="importTitle">导入账号</h2></div><button type="button" class="icon-button" data-action="close-import" aria-label="关闭">×</button></div>
       <p class="muted">粘贴单个账号 JSON、账号数组，或选择多个 JSON 文件。内容只在本地解析并写入 <code>accounts/</code>。</p>
       <label class="field"><span>账号 JSON</span><textarea id="importJson" rows="12" spellcheck="false" placeholder='{"id":"account-1","device_id":"...","web_id":"...","cookies":{"sessionid":"..."}}'></textarea></label>
       <label class="field file-field"><span>或从 JSON 文件导入（可多选）</span><input id="importFiles" type="file" accept=".json,application/json" multiple></label>
       <p id="importError" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions"><button type="button" class="button ghost" data-action="close-import">取消</button><button type="submit" class="button primary">导入并保存</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="accountDialog" class="dialog" aria-labelledby="accountEditTitle">
+    <form id="accountForm">
+      <div class="dialog-heading"><h2 id="accountEditTitle">编辑账号信息</h2><button type="button" class="icon-button" data-close="accountDialog" aria-label="关闭账号编辑">×</button></div>
+      <p id="accountEditId" class="muted small"></p>
+      <label class="field"><span>名称</span><input id="accountName" maxlength="200"></label>
+      <label class="field"><span>备注</span><textarea id="accountRemark" rows="3" maxlength="2000"></textarea></label>
+      <label class="field"><span>分组（留空为未分组）</span><input id="accountEditGroup" maxlength="200" list="groupSuggestions"></label>
+      <datalist id="groupSuggestions"></datalist>
+      <p id="accountFeedback" class="form-feedback" role="status" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close="accountDialog">取消</button><button type="submit" class="button primary">保存账号信息</button></div>
+    </form>
+  </dialog>
+  <dialog id="keyDialog" class="dialog" aria-labelledby="keyTitle">
+    <form id="keyForm">
+      <div class="dialog-heading"><h2 id="keyTitle">创建 API Key</h2><button type="button" class="icon-button" data-close="keyDialog" aria-label="关闭密钥编辑">×</button></div>
+      <label class="field"><span>名称</span><input id="keyName" maxlength="200" required></label>
+      <label class="field"><span>并发上限（0 表示不限）</span><input id="keyConcurrency" type="number" min="0" step="1" value="0" required></label>
+      <fieldset class="selector-field"><legend>允许的模型</legend><p class="muted small">不选表示允许全部模型。</p><div id="keyModels" class="check-options"></div></fieldset>
+      <fieldset class="selector-field"><legend>允许的账号</legend><p class="muted small">不选表示允许全部账号。</p><div id="keyAccounts" class="check-options"></div></fieldset>
+      <label id="keyEnabledField" class="check-label"><input id="keyEnabled" type="checkbox" checked>启用此 API Key</label>
+      <p id="keyFeedback" class="form-feedback" role="status" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close="keyDialog">取消</button><button type="submit" class="button primary">保存 API Key</button></div>
+    </form>
+  </dialog>
+  <dialog id="keySecretDialog" class="dialog" aria-labelledby="keySecretTitle">
+    <div class="form-stack">
+      <h2 id="keySecretTitle">API Key 已创建</h2><p>完整密钥仅显示这一次。请复制到安全位置；关闭后无法再次查看。</p>
+      <label class="field"><span>新 API Key（可手动选择并复制）</span><input id="newKeySecret" readonly autocomplete="off" spellcheck="false"></label>
+      <p id="copyFeedback" class="form-feedback" role="status" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button secondary" id="copyKey">复制密钥</button><button type="button" class="button primary" data-close="keySecretDialog">已保存，关闭</button></div>
+    </div>
+  </dialog>
+  <dialog id="batchDialog" class="dialog" aria-labelledby="batchTitle">
+    <form id="batchForm">
+      <h2 id="batchTitle">确认批量操作</h2><p id="batchDescription"></p>
+      <label class="field" id="batchGroupField" hidden><span>目标分组（留空移出分组）</span><input id="batchGroup" maxlength="200" list="groupSuggestions"></label>
+      <p id="batchDialogFeedback" class="form-feedback" role="status" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button ghost" data-close="batchDialog">取消</button><button type="submit" class="button primary" id="batchConfirm">确认</button></div>
     </form>
   </dialog>
 

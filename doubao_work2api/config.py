@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -25,6 +25,7 @@ class Settings:
     pc_version: str = "2.36.11"
     runtime_version: str = "3.45.3"
     model_key: str = "person-deepseek-v4-1-flash-261017"
+    admin_password: str = field(default="admin", repr=False)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,6 +33,7 @@ class Settings:
             host=os.getenv("DOUBAO_WORK_HOST", "127.0.0.1").strip(),
             port=_env_int("DOUBAO_WORK_PORT", 18789),
             api_key=os.getenv("DOUBAO_WORK_API_KEY", "sk-local-change-me").strip(),
+            admin_password=os.getenv("DOUBAO_WORK_ADMIN_PASSWORD", "admin"),
             data_dir=Path(
                 os.getenv("DOUBAO_WORK_DATA_DIR", "data")
             ).expanduser().resolve(),

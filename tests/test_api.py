@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
+from doubao_work2api import __version__
 
 from doubao_work2api import app as app_module
 from doubao_work2api.app import create_app
@@ -17,8 +20,16 @@ def settings(tmp_path, *, api_key: str = "") -> Settings:
     )
 
 
+@contextmanager
+def admin_client(app):
+    with TestClient(app) as client:
+        response = client.post("/admin/login", json={"password": "admin"})
+        assert response.status_code == 200
+        yield client
+
+
 def test_health_and_models(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         assert client.get("/health").status_code == 200
         denied = client.get("/v1/models")
         allowed = client.get(
@@ -35,7 +46,7 @@ def test_health_and_models(tmp_path) -> None:
 
 
 def test_chat_without_account_returns_clear_error(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
             "/v1/chat/completions",
             headers={"Authorization": "Bearer secret"},
@@ -49,7 +60,7 @@ def test_chat_without_account_returns_clear_error(tmp_path) -> None:
 
 
 def test_chat_rejects_unknown_model(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
             "/v1/chat/completions",
             headers={"Authorization": "Bearer secret"},
@@ -69,7 +80,7 @@ def test_admin_accounts_does_not_expose_cookies(tmp_path) -> None:
         '{"id":"one","cookie":"sessionid=secret","device_id":"d","web_id":"w"}',
         encoding="utf-8",
     )
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.get(
             "/admin/accounts",
             headers={"Authorization": "Bearer secret"},
@@ -81,7 +92,7 @@ def test_admin_accounts_does_not_expose_cookies(tmp_path) -> None:
 
 
 def test_web_ui_and_assets_are_served(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path))) as client:
+    with admin_client(create_app(settings(tmp_path))) as client:
         index = client.get("/")
         css = client.get("/ui-assets/app.css")
         script = client.get("/ui-assets/app.js")
@@ -91,7 +102,7 @@ def test_web_ui_and_assets_are_served(tmp_path) -> None:
     assert script.status_code == 200
     assert "Content-Security-Policy" in index.headers
     assert 'id="page-overview"' in index.text
-    assert 'id="page-gateway"' in index.text
+    assert 'id="modelCatalog"' in index.text
     assert 'id="page-accounts"' in index.text
     assert 'id="page-analytics"' in index.text
     assert 'id="page-settings"' in index.text
@@ -99,14 +110,14 @@ def test_web_ui_and_assets_are_served(tmp_path) -> None:
 
 
 def test_admin_config_exposes_catalog_and_runtime(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.get(
             "/admin/config",
             headers={"Authorization": "Bearer secret"},
         )
     assert response.status_code == 200
     body = response.json()
-    assert body["version"] == "0.1.0"
+    assert body["version"] == __version__
     assert len(body["models"]) == 8
     assert body["models"][0]["upstream_key"] == (
         "person-deepseek-v4-1-flash-261017"
@@ -116,7 +127,7 @@ def test_admin_config_exposes_catalog_and_runtime(tmp_path) -> None:
 
 def test_import_toggle_and_clear_cooldown(tmp_path) -> None:
     headers = {"Authorization": "Bearer secret"}
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         imported = client.post(
             "/admin/accounts/import",
             headers=headers,
@@ -157,7 +168,7 @@ def test_import_toggle_and_clear_cooldown(tmp_path) -> None:
         accounts = client.get("/admin/accounts", headers=headers).json()["data"]
         assert len(accounts) == 1
         assert "secret-cookie" not in str(accounts)
-        saved = (tmp_path / "accounts" / "web-account.json").read_text(
+        saved = next((tmp_path / "accounts").glob("*.json")).read_text(
             encoding="utf-8"
         )
         assert "secret-cookie" in saved
@@ -165,7 +176,7 @@ def test_import_toggle_and_clear_cooldown(tmp_path) -> None:
 
 def test_import_accepts_account_arrays(tmp_path) -> None:
     headers = {"Authorization": "Bearer secret"}
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
             "/admin/accounts/import",
             headers=headers,
@@ -187,19 +198,19 @@ def test_import_accepts_account_arrays(tmp_path) -> None:
 
 
 def test_toggle_unknown_account_returns_404(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.patch(
             "/admin/accounts/missing",
             headers={"Authorization": "Bearer secret"},
             json={"enabled": False},
         )
-    assert response.status_code in {404, 405}
+    assert response.status_code == 404
 
 
-def test_admin_login_checks_key(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
-        denied = client.post("/admin/login", json={"api_key": "wrong"})
-        allowed = client.post("/admin/login", json={"api_key": "secret"})
+def test_admin_login_checks_password(tmp_path) -> None:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
+        denied = client.post("/admin/login", json={"password": "wrong"})
+        allowed = client.post("/admin/login", json={"password": "admin"})
     assert denied.status_code == 401
     assert allowed.status_code == 200
     assert allowed.json()["ok"] is True
@@ -225,7 +236,7 @@ def test_scan_desktop_imports_account_without_exposing_cookie(
         )
 
     monkeypatch.setattr(app_module, "scan_desktop_account", fake_scan)
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
             "/admin/accounts/scan-offline",
             headers={"Authorization": "Bearer secret"},
@@ -234,14 +245,14 @@ def test_scan_desktop_imports_account_without_exposing_cookie(
     assert response.json()["account"]["id"] == "desktop-scan"
     assert response.json()["source"] == "offline"
     assert "secret-cookie" not in response.text
-    saved = (tmp_path / "accounts" / "desktop-scan.json").read_text(
+    saved = next((tmp_path / "accounts").glob("*.json")).read_text(
         encoding="utf-8"
     )
     assert "secret-cookie" in saved
 
 
 def test_removed_online_scan_endpoint_is_not_available(tmp_path) -> None:
-    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+    with admin_client(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
             "/admin/accounts/scan-desktop",
             headers={"Authorization": "Bearer secret"},
