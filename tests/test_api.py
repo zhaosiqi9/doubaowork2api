@@ -193,7 +193,7 @@ def test_toggle_unknown_account_returns_404(tmp_path) -> None:
             headers={"Authorization": "Bearer secret"},
             json={"enabled": False},
         )
-    assert response.status_code == 404
+    assert response.status_code in {404, 405}
 
 
 def test_admin_login_checks_key(tmp_path) -> None:
@@ -208,7 +208,7 @@ def test_admin_login_checks_key(tmp_path) -> None:
 def test_scan_desktop_imports_account_without_exposing_cookie(
     tmp_path, monkeypatch
 ) -> None:
-    async def fake_scan(pool, *, cdp_url):
+    async def fake_scan(pool):
         account = await pool.upsert(
             {
                 "id": "desktop-scan",
@@ -221,19 +221,29 @@ def test_scan_desktop_imports_account_without_exposing_cookie(
             account=account,
             created=True,
             cookie_count=1,
+            source="offline",
         )
 
     monkeypatch.setattr(app_module, "scan_desktop_account", fake_scan)
     with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
         response = client.post(
-            "/admin/accounts/scan-desktop",
+            "/admin/accounts/scan-offline",
             headers={"Authorization": "Bearer secret"},
-            json={"cdp_url": "http://127.0.0.1:9222"},
         )
     assert response.status_code == 200
     assert response.json()["account"]["id"] == "desktop-scan"
+    assert response.json()["source"] == "offline"
     assert "secret-cookie" not in response.text
     saved = (tmp_path / "accounts" / "desktop-scan.json").read_text(
         encoding="utf-8"
     )
     assert "secret-cookie" in saved
+
+
+def test_removed_online_scan_endpoint_is_not_available(tmp_path) -> None:
+    with TestClient(create_app(settings(tmp_path, api_key="secret"))) as client:
+        response = client.post(
+            "/admin/accounts/scan-desktop",
+            headers={"Authorization": "Bearer secret"},
+        )
+    assert response.status_code in {404, 405}

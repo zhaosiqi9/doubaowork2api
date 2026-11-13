@@ -149,7 +149,7 @@
         <section id="page-accounts" class="page">
           <div class="page-intro">
             <div><span class="eyebrow">ACCOUNT POOL</span><h2>账号池</h2><p>Cookie 只在本地保存，面板只显示设备标识摘要。</p></div>
-            <div class="button-row"><button type="button" class="button secondary" data-action="scan-desktop">扫描本机客户端</button><button type="button" class="button primary" data-action="open-import">导入账号</button></div>
+            <div class="button-row"><button type="button" class="button secondary" data-action="scan-offline" title="读取本机客户端数据，需先关闭客户端">离线扫描</button><button type="button" class="button primary" data-action="open-import">导入账号</button></div>
           </div>
           <div class="metric-grid compact-grid">
             <article class="metric-card"><span>账号</span><strong id="accountMetricTotal">0</strong><small>已载入</small></article>
@@ -160,7 +160,7 @@
           <section class="panel">
             <div class="panel-heading"><div><span class="eyebrow">IDENTITIES</span><h2>已导入账号</h2></div><span class="muted small">凭证不下发浏览器</span></div>
             <div id="accountList" class="account-list"></div>
-            <div id="accountEmpty" class="empty-state" hidden><strong>还没有账号</strong><p>扫描本机客户端或导入账号 JSON 后即可开始接单。</p></div>
+            <div id="accountEmpty" class="empty-state" hidden><strong>还没有账号</strong><p>先登录一次豆包工作电脑版并退出，然后点「离线扫描」；也可导入账号 JSON。</p></div>
           </section>
         </section>
 

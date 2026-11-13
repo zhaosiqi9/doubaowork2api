@@ -2,7 +2,7 @@
 
 把豆包工作电脑版的模型转换为 OpenAI 兼容 API。服务端只保存用户自行导入的
 账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包上游，不需要持续
-运行豆包工作电脑版、浏览器、CDP 或 Windows 桌面。
+运行豆包工作电脑版、浏览器或 Windows 桌面。
 
 当前版本：`0.1.0`。这是文本 Chat Completions 的首个公开版本，不包含图片、
 视频或其他媒体接口。
@@ -61,37 +61,21 @@
 账号目录默认是 `accounts/`，已被 `.gitignore` 排除。不要把账号文件提交到
 GitHub，也不要贴到聊天中。
 
-如果本机已有登录中的豆包工作电脑版，可以直接在控制台点「扫描本机客户端」：
+如果本机已有登录过的豆包工作电脑版，可以直接在控制台点「离线扫描」：
 
-桌面扫描是可选能力，需要额外安装：
+Windows 离线扫描会读取客户端留下的 Cookie 数据库和 Local Storage，
+使用当前 Windows 用户的 DPAPI 解密，然后写入本地 `accounts/`。
+客户端必须关闭，否则 Chromium 会独占 Cookie 数据库。读取完成后所有
+临时文件和数据库句柄立即释放，不要求客户端常驻，也不需要开放 `9222`。
 
-```powershell
-python -m pip install -e ".[desktop]"
+```text
+1. 登录一次豆包工作电脑版
+2. 完全退出客户端
+3. 打开控制台 → 账号 → 离线扫描
 ```
 
-1. 关闭已经运行的豆包工作电脑版。
-2. 用调试端口启动并登录客户端：
-
-```powershell
-& "$env:LOCALAPPDATA\DoubaoWork\Application\app\DoubaoWork.exe" `
-  --remote-debugging-port=9222 `
-  --user-data-dir="$env:LOCALAPPDATA\DoubaoWork\User Data"
-```
-
-3. 回到控制台点「扫描本机客户端」。网关只读取本机
-   `127.0.0.1:9222` 的当前登录态，读取 Cookie、`device_id` 和 `web_id`
-   后写入本地 `accounts/`，不会上传到第三方。
-
-也可以直接通过脚本导出：
-
-```powershell
-python scripts/export_desktop_account.py `
-  --name account-1 `
-  --output accounts/account-1.json
-```
-
-CDP 必须只监听 `127.0.0.1`。扫描或导出完成后就可以关闭豆包工作电脑版；
-本项目运行时不再需要它。
+离线扫描不需要安装 Playwright、启动调试端口或让客户端常驻。
+Playwright 不属于正式运行依赖，也不会随基础安装或 wheel 安装。
 
 ## 启动
 
@@ -157,17 +141,9 @@ curl http://127.0.0.1:18789/v1/chat/completions \
 
 ## 协议验证
 
-`scripts/probe_direct_replay.py` 是从已登录豆包工作电脑版的 CDP 会话抓取一次真实
-请求，再用外部 `httpx` 重放的诊断脚本。它只用于验证上游协议，不是运行时依赖。
-正式的最小直连验证脚本是 `scripts/live_direct_probe.py`。
-
-```powershell
-python scripts/probe_direct_replay.py --prompt "只回复 PROBE"
-```
-
 当前实验已确认 `POST https://www.doubao.com/chat/completion` 在携带有效 Cookie、
 `device_id`、`web_id` 时返回 SSE，并且移除 `msToken` / `a_bogus` 后仍能建立
-SSE 流。正式版本仍会继续用完整新请求体验证最终文本和 Linux 环境。
+SSE 流。
 
 2026-11-13 的实测结果：
 
@@ -189,6 +165,8 @@ SSE 流。正式版本仍会继续用完整新请求体验证最终文本和 Lin
 ## 安全与限制
 
 - 本项目的账号文件包含登录凭证，按密码级别保护。
-- 不读取豆包工作电脑版的 Cookie 数据库，也不内置签名算法。
+- 「离线扫描」只在用户点击时读取本机豆包客户端的 Cookie 数据库和 Local
+  Storage，使用当前 Windows 用户的 DPAPI 解密，数据只写入本地 `accounts/`；
+  不会上传到第三方。运行时不需要豆包客户端常驻，也不内置签名算法。
 - 上游协议、模型键和风控可能变化；当前只实现文本 Chat Completions。
 - `usage` 为本地估算，不是上游真实 token 账单。

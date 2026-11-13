@@ -351,12 +351,12 @@ async function importAccounts(document) {
   return result;
 }
 
-async function scanDesktop(button) {
+async function scanOffline(button) {
   const original = button.textContent;
   button.disabled = true;
   button.textContent = "扫描中…";
   try {
-    const result = await api("/admin/accounts/scan-desktop", { method: "POST", body: JSON.stringify({ cdp_url: "http://127.0.0.1:9222" }) });
+    const result = await api("/admin/accounts/scan-offline", { method: "POST" });
     await refresh({ silent: true });
     showToast(`${result.created ? "已导入" : "已更新"} ${result.account.id}（${result.cookie_count} 个 Cookie）`);
   } catch (error) {
@@ -491,7 +491,7 @@ document.addEventListener("click", (event) => {
   if (action === "refresh") refresh();
   if (action === "logout") logout();
   if (action === "open-import") openImport();
-  if (action === "scan-desktop") scanDesktop(target);
+  if (action === "scan-offline") scanOffline(target);
   if (action === "close-import") closeImport();
   if (action === "toggle-account") toggleAccount(target.dataset.id, target.dataset.enabled === "true");
   if (action === "clear-cooldown") clearCooldown(target.dataset.id);

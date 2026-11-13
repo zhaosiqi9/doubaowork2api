@@ -41,10 +41,6 @@ class LoginRequest(BaseModel):
     api_key: str = ""
 
 
-class DesktopScanRequest(BaseModel):
-    cdp_url: str = "http://127.0.0.1:9222"
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     pool = AccountPool(
@@ -183,22 +179,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.post(
-        "/admin/accounts/scan-desktop",
+        "/admin/accounts/scan-offline",
         dependencies=[Depends(require_auth)],
     )
-    async def scan_desktop(
-        payload: DesktopScanRequest | None = None,
-    ) -> dict[str, Any]:
+    async def scan_offline() -> dict[str, Any]:
         try:
-            result = await scan_desktop_account(
-                pool,
-                cdp_url=(payload.cdp_url if payload else "http://127.0.0.1:9222"),
-            )
+            result = await scan_desktop_account(pool)
         except DesktopScanError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {
             "created": result.created,
             "cookie_count": result.cookie_count,
+            "source": result.source,
             "account": result.account.public_dict(),
         }
 
