@@ -58,8 +58,10 @@ def classify_status(status: int, body: str) -> None:
 
 
 def classify_body_error(payload: dict[str, Any]) -> None:
-    code = str(payload.get("code") or payload.get("status_code") or "")
+    code = str(payload.get("error_code") or payload.get("code") or payload.get("status_code") or "")
     if code in {"0", "200", ""}:
+        if payload.get("_event") == "STREAM_ERROR":
+            raise UpstreamError("Doubao reported a stream error.", code="upstream_stream_error")
         return
     if code in {"710012001"}:
         raise UpstreamAuthError(
@@ -73,7 +75,8 @@ def classify_body_error(payload: dict[str, Any]) -> None:
         raise UpstreamRateLimitError(
             f"Doubao account is rate limited ({code}).", code=code
         )
-    message = payload.get("message") or payload.get("msg") or "upstream error"
+    # STREAM_ERROR may carry internal metadata; expose only its stable code.
+    message = "upstream stream error" if payload.get("_event") == "STREAM_ERROR" else (payload.get("message") or payload.get("msg") or "upstream error")
     raise UpstreamError(f"Doubao error {code}: {message}", code=code)
 
 

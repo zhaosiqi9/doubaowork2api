@@ -4,14 +4,16 @@
 账号 Cookie 和 `device_id` / `web_id`，运行时直接请求豆包上游，不需要持续
 运行豆包工作电脑版、浏览器或 Windows 桌面。
 
-当前版本：`0.2.1`。支持文字与图片输入的 Chat Completions、工具调用文本桥接，
-不包含生图或生视频接口。
+当前版本：`0.3.0`。支持文字与图片输入的 Chat Completions 和 Responses、
+工具调用文本桥接、JSON Schema 校验、多轮回放与上下文压缩。
 
-## MVP 功能
+## 功能
 
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/responses`、`POST /v1/responses/compact`
+- Responses 查询、删除和输入项查询，`previous_response_id` 与加密历史回放
 - OpenAI 流式 `chat.completion.chunk` SSE 和非流式响应
 - `Authorization: Bearer <key>` / `x-api-key` 鉴权
 - 多账号轮换；401/403 禁用账号，429/5xx 临时冷却
@@ -22,8 +24,10 @@
 - 每账号独立 HTTP 会话与 Cookie 容器，导入更新保留管理信息
 - 模型目录与豆包上游 `model_item_key` 分离映射
 - 工具定义、工具选择及工具结果历史转换；流式与非流式返回 OpenAI `tool_calls`
-- DeepSeek Flash 五档思考强度映射，总览展示已核实的模型能力
+- 各模型独立的上下文窗口与思考强度映射，总览展示已核实的模型能力
 - 图片 URL / Base64 输入、按账号上传与图片附件转换，面板支持多选图片测试
+- 工具历史配对与规整、思考历史保真，流式与非流式共用解析逻辑
+- `json_object` / `json_schema` 输出校验、输出预算和 `stop`、完整轮次上下文裁剪
 
 ## 模型目录
 
@@ -149,14 +153,78 @@ curl http://127.0.0.1:18789/v1/chat/completions \
 这属于文本桥接，效果取决于模型遵循约定的能力，不等同于上游原生工具协议。
 工具请求的答案先缓冲校验后再发送 SSE；普通文本请求仍即时增量返回。
 
-DeepSeek Flash 可传 `"reasoning_effort": "low"`、`"medium"`、`"high"`、
-`"xhigh"`、`"max"`，分别映射官方档位 `3 / 4 / 5 / 6 / 7`，不传时使用
-默认最高档。其他模型的可配置档位尚未核实，显式请求时会明确报错。
+工具历史按调用 ID 配对；兼容旧式 `functions` / `function_call` 和函数结果，
+对孤立、冲突或有歧义的历史明确报错。参数格式容错仅用于结构化工具信封，
+不会执行模型返回的代码。思考历史保留原文并单独标记回放；响应以
+`reasoning_content` 和 `reasoning` 镜像暴露上游实际返回的可见思考，不生成隐藏推理。
 
-DeepSeek Flash 的总上下文窗口由官方配置及真实响应确认是 **300,000 tokens**。
-系统提示和历史也占用窗口；独立最大输入、最大输出尚未核实。
-音频、视频等未支持的输入会明确报错；未支持的生成控制参数也不会被静默忽略。
-用量中的 token 数仍为本地估算，不能用于精确计费。
+2026-11-13 从官方模型配置核实的能力：
+
+| 模型 | 总窗口 | `reasoning_effort` | 默认 |
+| --- | ---: | --- | --- |
+| 豆包 2.1 Lite | 256,000 | `low / medium / high` | `high` |
+| DeepSeek Flash、DeepSeek V4 Pro、三个 Kimi | 300,000 | `low / medium / high / xhigh / max` | `max` |
+| GLM 5.3、GLM 5.3 Flash | 300,000 | `low / high / max` | `max` |
+
+各档分别映射官方整数 `3 / 4 / 5 / 6 / 7`；不支持的档位明确报错。
+总窗口包含服务端指令和历史；独立最大输入、最大输出仍未核实，也未完成窗口极限测试。
+
+## Responses、多轮回放与压缩
+
+```bash
+curl http://127.0.0.1:18789/v1/responses \
+  -H "Authorization: Bearer sk-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-v4.1-flash",
+    "input": "只回复 OK",
+    "reasoning": {"effort": "low"},
+    "store": false
+  }'
+```
+
+支持 `input_text`、`input_image`、函数调用与结果、可见思考项和流式事件。
+`stream: true` 返回有序的增量事件及 `response.completed / incomplete / failed` 终态。
+Chat 与 Responses 使用同一套图片上传、工具转换、权限和 Key 并发控制。
+
+默认 `store: true` 把响应和历史缓存在当前进程内存，供 `previous_response_id`、
+`GET /v1/responses/{id}`、`DELETE /v1/responses/{id}` 和
+`GET /v1/responses/{id}/input_items` 使用。缓存有效期 1 小时，最多 128 条、
+合计 64 MiB；响应过大时返回 `store: false`。缓存会因到期、容量淘汰或重启失效。
+`store: false` 不缓存响应正文，调用方可自行回传历史。
+
+`POST /v1/responses/compact` 接受 `model` 与 `input`，调用同模型生成摘要，
+保留系统消息和最近完整轮次，返回加密 `compaction` 项；下一次把其 `output`
+放进 Responses `input` 即可继续。摘要会消耗上游额度，也可能丢失细节。
+这由网关生成摘要实现，不是豆包原生压缩或自动后台压缩。
+
+`include: ["reasoning.encrypted_content"]` 支持网关签发的思考回放。
+思考和压缩令牌绑定当前 API Key 的 ID、权限与模型，24 小时后过期，不能跨 Key、
+跨模型或跨网关密钥使用。仅加密密钥保存于本地 `data/response-replay.key`，
+响应正文不会随缓存写入磁盘；请保护此文件，删除后旧令牌无法解密。
+
+不提供 Anthropic Messages、生图、生视频、后台 Responses 或内置网页搜索工具。
+这些能力及不支持的参数会明确报错。
+
+## JSON 输出与长度控制
+
+Chat 使用 `response_format`，Responses 使用 `text.format`，支持 `text`、
+`json_object` 与 `json_schema`。网关先给模型格式提示，再实际解析并验证输出；
+不合格时返回错误，不能保证上游每次遵循 Schema。Schema 仅允许本地引用，
+不下载远程或本机文件引用；`strict: true` 的工具参数也会验证。
+JSON 和工具响应先缓冲校验，普通文本实时增量发送。
+
+`max_tokens / max_completion_tokens`（Chat）、`max_output_tokens`（Responses）
+实现网关侧保守输出预算，正文与可见思考共用预算；达到预算返回 `length`
+或 `incomplete`。Chat 支持跨数据块匹配 `stop`。普通流达到预算或 stop 会关闭
+上游连接；结构化输出需先收完整答案再校验，因此不能据此保证精确控制上游计费。
+
+`truncation` 默认 `disabled`，估算超窗明确报错；设为 `auto` 时，仅裁掉最旧的
+完整用户轮次，保留系统指令、最近轮次及其工具调用与结果，仍超窗则报错。
+网关为服务端指令预留 8,192，并为输出预留请求预算（未指定时为 4,096）。
+
+`usage` 和窗口预算以 UTF-8 字节数保守估算文本，每张图片另预留 4,096；
+带有估算标记，不是官方 tokenizer 的实测值，可能比实际 token 数更保守，不能用于精确计费。
 
 ## 图片输入
 
@@ -186,7 +254,7 @@ DeepSeek Flash 的总上下文窗口由官方配置及真实响应确认是 **30
 
 DeepSeek Flash 已用合成图实测识别形状、颜色和数字；其他模型的具体识图能力仍取决于上游。
 `image_url.detail` 可传 `auto / low / high`，目前均采用上游默认处理，不对应精确的
-OpenAI 图片 token 计价。响应 `usage` 仅估算文本，图片 token 消耗尚未计入。
+OpenAI 图片 token 计价。响应 `usage` 中的图片部分仅为固定预算估算。
 
 ## 配置
 
@@ -243,11 +311,17 @@ SSE 流。
 - 仅发送合成图及不含答案的描述请求，DeepSeek Flash 正确识别红色正方形、蓝色圆形和数字 `314`。
 - 公网图片 URL 经 DNS 校验、固定 IP 与 TLS SNI 的下载路径实测通过。
 
+0.3.0 补充实测：
+
+- Responses 严格 JSON Schema 返回预期对象，`previous_response_id` 流式续聊正确找回上一轮标记。
+- 摘要压缩真实返回加密 `compaction` 项；后续账号触发 `710022004` 人工验证，已停止测试。
+- 压缩后回放的转换与隔离通过自动化测试，真实上游端到端回放尚未确认。
+
 ## 安全与限制
 
 - 本项目的账号文件包含登录凭证，按密码级别保护。
 - 「离线扫描」只在用户点击时读取本机豆包客户端的 Cookie 数据库和 Local
   Storage，使用当前 Windows 用户的 DPAPI 解密，数据只写入本地 `accounts/`；
   不会上传到第三方。运行时不需要豆包客户端常驻，也不内置签名算法。
-- 上游协议、模型键和风控可能变化；当前实现文字/图片 Chat Completions 和工具调用文本桥接。
-- `usage` 为本地文本估算，不含精确图片 token，不是上游真实 token 账单。
+- 上游协议、模型键和风控可能变化；转换层不代表全部 OpenAI API 能力等价。
+- `usage` 为网关保守估算，不是上游真实 token 账单。

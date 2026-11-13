@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.0 - 2026-11-13
+
+### Responses 与多轮上下文
+
+- 新增 `POST /v1/responses`，支持文字、图片、函数调用及结果、思考历史，流式与非流式共用已有上游转换链路。
+- 流式返回增量文本、工具参数与思考事件，维护事件顺序，区分完成、截断和失败；中断时释放账号锁及 Key 并发名额。
+- 支持 `previous_response_id`、`item_reference`，以及响应查询、删除与输入项分页。响应内存缓存按 API Key 及权限隔离，有效期 1 小时，最多 128 条/64 MiB；`store: false` 不缓存正文。
+- 新增 `POST /v1/responses/compact`：同模型生成继续对话摘要，保留系统消息与最近完整轮次，再签发加密回放项。压缩会产生一次上游调用，不是上游原生压缩或自动后台压缩。
+- 支持 `reasoning.encrypted_content`。网关签发的思考/压缩令牌绑定 Key、权限及模型，有效期 24 小时；只在本地保存加密密钥，不把响应缓存正文写入磁盘。
+
+### 工具、思考与结构化输出
+
+- 工具历史按调用 ID 配对；安全补全唯一可确定的缺失 ID，合并相邻调用，拒绝孤立、冲突和有歧义的历史。兼容旧式 `functions` / `function_call` / `role: function`。
+- 工具信封容错支持多层 JSON、对象参数、空参数与尾逗号；普通 JSON 和示例代码围栏不会被当作工具调用，也不执行任何代码。
+- 保留可见思考历史的原文及空白，输出 `reasoning_content` / `reasoning` 镜像；不宣称能获取上游未暴露的隐藏推理。
+- 修复真实上游重复更新 `10040` 思考容器时，正文被全局开关误归类、进而出现空响应或 JSON 校验失败的问题；改按文本块关系判断，不将视觉折叠分组视为思考归属。
+- 修复 HTTP 200 的 SSE 中 `STREAM_ERROR.error_code` 未识别的问题：账号验证、授权失效和限流按实际错误分类，避免将 `710022004` 人工验证误报为空响应。
+- Chat 的 `response_format` 和 Responses 的 `text.format` 支持 `text / json_object / json_schema`，生成后实际校验；严格工具参数同样校验。仅允许本地 Schema 引用，拒绝远程/文件引用和过深结构。
+
+### 模型与预算
+
+- 读取当前官方配置，补齐现有 8 个模型的独立窗口与思考档位：Lite 256K、其余 300K；Lite 三档，GLM 三档，DeepSeek/Kimi 五档。独立输入/输出上限仍未核实。
+- 支持 Chat 的 `max_tokens / max_completion_tokens`、Responses 的 `max_output_tokens` 网关输出预算及 Chat `stop`。普通流命中后关闭上游连接并标记 `length / incomplete`。
+- 上下文默认超窗明确报错；`truncation: auto` 按完整用户轮次裁旧历史，保留系统消息、最近轮次及工具调用结果关系。
+- token 用量与预算改为明确标记的保守估算：文本按 UTF-8 字节数，图片每张固定预留 4,096；并非官方 tokenizer 或真实计费。结构化响应须收完整答案再校验，不能保证精确限制上游消耗。
+
+### 范围
+
+- 不加入 Anthropic Messages、生图、生视频、后台 Responses 和内置搜索工具；不支持的请求明确报错。
+- cryptography 为跨平台运行依赖，用于本地加密回放；新增 jsonschema 校验依赖，继续无需 Playwright 或桌面客户端常驻。
+
+### 验证
+
+- Python 自动化回归 `438 passed, 1 skipped`，覆盖 Responses 请求/流式事件、权限隔离、加密回放、Schema、输出预算、完整轮次裁剪及错误分类；面板 JavaScript 检查和测试通过。
+- 独立环境安装 wheel，验证面板资源、Responses 路由、Schema 和加密回放；Python 3.10 语法与发布包内容检查通过，不包含账号、运行时数据或截图。
+- 真实上游通过 Responses 严格 JSON Schema、`previous_response_id` 流式续聊，以及摘要压缩请求。
+- 同一账号随后返回 `710022004` 人工验证错误，已停止真实请求。压缩令牌回放通过自动化测试，真实上游端到端回放尚待账号验证恢复后确认。
+
 ## 0.2.1 - 2026-11-13
 
 ### 图片输入

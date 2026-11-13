@@ -17,6 +17,8 @@ from .errors import GatewayError
 from .models import ChatCompletionRequest, ChatMessage
 from .image_inputs import validate_image_source
 from .image_upload import UploadedImage
+from .history import normalize_messages, render_reasoning_history
+from .request_contract import validate_contract, render_contract_instructions
 
 
 class RequestValidationError(GatewayError):
@@ -32,15 +34,11 @@ class UnsupportedContentError(GatewayError):
 
 
 _UNSUPPORTED_PARAMETERS = (
-    "max_tokens",
-    "max_completion_tokens",
     "temperature",
     "top_p",
-    "stop",
     "frequency_penalty",
     "presence_penalty",
     "seed",
-    "response_format",
     "logprobs",
     "top_logprobs",
     "n",
@@ -121,8 +119,8 @@ def _validate_content(request: ChatCompletionRequest) -> None:
                         "Message content parts must be objects."
                     )
                 if part.get("type") == "image_url":
-                    if message.role != "user":
-                        raise UnsupportedContentError("Images are supported only in user messages.")
+                    if message.role not in {"user", "tool"}:
+                        raise UnsupportedContentError("Images are supported only in user messages and tool results.")
                     image = part.get("image_url")
                     if not isinstance(image, dict) or not isinstance(image.get("url"), str):
                         raise UnsupportedContentError("image_url must contain a string url.")
@@ -138,7 +136,7 @@ def _validate_content(request: ChatCompletionRequest) -> None:
                     kind = part.get("type")
                     raise UnsupportedContentError(
                         f"Unsupported message content type: {kind!r}. "
-                        "Only text, input_text, and user image_url content are supported."
+                        "Only text, input_text, and user/tool image_url content are supported."
                     )
                 if not isinstance(part.get("text"), str):
                     raise UnsupportedContentError(
@@ -196,13 +194,27 @@ def resolve_reasoning_effort(request: ChatCompletionRequest) -> int:
         )
     raise RequestValidationError(
         f"Unsupported reasoning_effort for model {spec.id!r}. "
-        "Supported values are low, medium, high, xhigh, max "
-        "and integers 3 through 7.",
+        f"Supported levels are {', '.join(spec.reasoning_levels)} "
+        "or their corresponding upstream integers.",
         code="invalid_reasoning_effort",
     )
 
 
-def validate_request(request: ChatCompletionRequest) -> None:
+def validate_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
+    legacy_functions = getattr(request, "functions", None)
+    if legacy_functions is not None:
+        if request.tools or not isinstance(legacy_functions, list):
+            raise RequestValidationError("Use either functions or tools with a list of function definitions.", code="invalid_tools")
+        choice = getattr(request, "function_call", None)
+        if isinstance(choice, dict):
+            choice = {"type": "function", "function": {"name": choice.get("name")}}
+        request = request.model_copy(update={"tools": [{"type": "function", "function": definition} for definition in legacy_functions], "tool_choice": choice})
+        # Mark the legacy fields consumed so repeated validation is idempotent.
+        request.__pydantic_extra__.pop("functions", None)
+        request.__pydantic_extra__.pop("function_call", None)
+    elif getattr(request, "function_call", None) is not None:
+        raise RequestValidationError("Legacy function_call requires functions; use tool_choice with modern tools.", code="invalid_tools")
+    request = request.model_copy(update={"messages": normalize_messages(request.messages)})
     model = request.model
     if not isinstance(model, str) or not model.strip():
         raise RequestValidationError(
@@ -223,10 +235,18 @@ def validate_request(request: ChatCompletionRequest) -> None:
             )
 
     _validate_content(request)
+    validate_contract(request)
     _validate_tools(request)
     for message in request.messages:
         render_tool_history(message)
     resolve_reasoning_effort(request)
+    if request.stream_options is not None and (
+        set(request.stream_options) - {"include_usage"}
+        or ("include_usage" in request.stream_options and type(request.stream_options["include_usage"]) is not bool)
+    ):
+        raise RequestValidationError("stream_options supports only a boolean include_usage.")
+    from .context import apply_context_budget
+    return apply_context_budget(request)
 
 
 def render_tool_history(message: ChatMessage) -> str | None:
@@ -262,6 +282,7 @@ def render_prompt(messages: list[ChatMessage]) -> str:
     image_index = 0
     for message in messages:
         rendered_history = render_tool_history(message)
+        historical_reasoning = render_reasoning_history(message)
         content = text_content(message)
         if isinstance(message.content, list) and any(part.get("type") == "image_url" for part in message.content):
             parts = []
@@ -272,10 +293,14 @@ def render_prompt(messages: list[ChatMessage]) -> str:
                 elif part.get("type") in {"text", "input_text"}:
                     parts.append(part["text"])
             content = "\n".join(parts)
+            if message.role == "tool":
+                rendered_history = render_tool_history(message.model_copy(update={"content": [{"type": "text", "text": content}]}))
         if message.role == "tool":
             content = rendered_history or ""
         elif rendered_history is not None:
             content = "\n\n".join(item for item in (content, rendered_history) if item)
+        if historical_reasoning is not None:
+            content = "\n\n".join(item for item in (historical_reasoning, content) if item)
         if not content:
             continue
         if message.role in {"system", "developer"}:
@@ -309,7 +334,7 @@ def upstream_payload(
     reasoning_effort: int | None = None,
     images: list[UploadedImage] | None = None,
 ) -> dict[str, Any]:
-    validate_request(request)
+    request = validate_request(request)
     spec = find_model(request.normalized_model)
     if spec is None:
         raise RequestValidationError(
@@ -326,6 +351,9 @@ def upstream_payload(
         )
         if instructions:
             prompt = f"System instructions:\n{instructions}\n\n{prompt}"
+    contract_instructions = render_contract_instructions(request)
+    if contract_instructions:
+        prompt = f"System instructions:\n{contract_instructions}\n\n{prompt}"
     resolved_effort = (
         resolve_reasoning_effort(request)
         if reasoning_effort is None
@@ -524,6 +552,7 @@ def chunk_payload(
         delta["content"] = content
     if reasoning:
         delta["reasoning_content"] = reasoning
+        delta["reasoning"] = reasoning
     return {
         "id": request_id,
         "object": "chat.completion.chunk",
@@ -551,6 +580,7 @@ def completion_payload(
     message: dict[str, Any] = {"role": "assistant", "content": content}
     if reasoning:
         message["reasoning_content"] = reasoning
+        message["reasoning"] = reasoning
     return {
         "id": request_id,
         "object": "chat.completion",
@@ -580,13 +610,87 @@ def sse_data(payload: dict[str, Any] | str) -> str:
     return f"data: {body}\n\n"
 
 
-def extract_text_fragments(payload: Any) -> Iterable[tuple[str, str]]:
+def _reasoning_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_reasoning_text(part) for part in value)
+    if isinstance(value, dict):
+        for key in ("text", "reasoning", "content"):
+            text = _reasoning_text(value.get(key))
+            if text:
+                return text
+    return ""
+
+
+def _reasoning_field(payload: dict[str, Any]) -> str:
+    for key in ("reasoning_content", "reasoning", "thinking", "reasoning_details"):
+        text = _reasoning_text(payload.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _text_block_kind(block: dict[str, Any], reasoning_ids: set[str]) -> str:
+    # collapse_block_id is a visual grouping (often the elapsed-time block),
+    # not proof that text belongs to the thinking container.
+    control = block.get("control_info") or {}
+    parent = block.get("parent_id") or block.get("parent_block_id") or (control.get("parent_block_id") if isinstance(control, dict) else None)
+    return "reasoning" if block.get("block_id") in reasoning_ids or parent in reasoning_ids else "content"
+
+
+class UpstreamTextParser:
+    """Track explicit block ancestry, never toggle on a container update."""
+
+    def __init__(self) -> None:
+        self.reasoning_ids: set[str] = set()
+        self.text_kinds: dict[str, str] = {}
+        self.last_text_kind = "content"
+
+    def feed(self, payload: dict[str, Any]) -> Iterable[tuple[str, str]]:
+        blocks = list(_iter_content_blocks(payload))
+        for block in blocks:
+            identity = block.get("block_id")
+            if block.get("block_type") == 10040 and isinstance(identity, str):
+                self.reasoning_ids.add(identity)
+        for block in blocks:
+            if block.get("block_type") != 10000:
+                continue
+            kind = _text_block_kind(block, self.reasoning_ids)
+            identity = block.get("block_id")
+            if isinstance(identity, str):
+                self.text_kinds[identity] = kind
+            self.last_text_kind = kind
+        if payload.get("_event") == "CHUNK_DELTA" and "_thinking" not in payload:
+            kind = self.text_kinds.get(payload.get("block_id"), self.last_text_kind)
+            payload = {**payload, "_thinking": kind == "reasoning"}
+        yield from extract_text_fragments(payload, reasoning_ids=self.reasoning_ids)
+
+
+def extract_text_fragments(payload: Any, *, reasoning_ids: set[str] | None = None) -> Iterable[tuple[str, str]]:
     if not isinstance(payload, dict):
         return
+    if isinstance(payload.get("choices"), list):
+        for choice in payload["choices"]:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or choice.get("message") or {}
+            if not isinstance(delta, dict):
+                continue
+            reason = _reasoning_field(delta)
+            if isinstance(reason, str) and reason:
+                yield "reasoning", reason
+            if isinstance(delta.get("content"), str) and delta["content"]:
+                yield "content", delta["content"]
+        return
+    direct_reasoning = _reasoning_field(payload)
+    if isinstance(direct_reasoning, str) and direct_reasoning:
+        yield "reasoning", direct_reasoning
     event_name = str(payload.get("_event") or "")
     if event_name == "CHUNK_DELTA" and isinstance(payload.get("text"), str):
         kind = "reasoning" if payload.get("_thinking") else "content"
-        yield kind, payload["text"]
+        if kind != "reasoning" or payload["text"] != direct_reasoning:
+            yield kind, payload["text"]
         return
     if event_name not in {"STREAM_MSG_NOTIFY", "STREAM_CHUNK", ""}:
         return
@@ -600,7 +704,7 @@ def extract_text_fragments(payload: Any) -> Iterable[tuple[str, str]]:
         if isinstance(text_block, dict) and isinstance(
             text_block.get("text"), str
         ):
-            kind = "reasoning" if payload.get("_thinking") else "content"
+            kind = _text_block_kind(block, reasoning_ids or set())
             yield kind, text_block["text"]
     for patch in payload.get("patch_op", []):
         if not isinstance(patch, dict):
@@ -615,7 +719,8 @@ def extract_text_fragments(payload: Any) -> Iterable[tuple[str, str]]:
             except json.JSONDecodeError:
                 continue
             if isinstance(parsed, dict) and isinstance(parsed.get("text"), str):
-                yield "content", parsed["text"]
+                kind = "reasoning" if parsed.get("type") in {"reasoning", "thinking"} else "content"
+                yield kind, parsed["text"]
 
 
 def _iter_content_blocks(payload: dict[str, Any]) -> Iterable[dict[str, Any]]:

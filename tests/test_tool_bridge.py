@@ -300,19 +300,20 @@ def test_render_history_rejects_excessive_json_depth_as_request_error() -> None:
         )
     assert raised.value.status_code == 400
 
-    with pytest.raises(ToolBridgeRequestError):
-        render_tool_history(
-            ChatMessage(
-                role="assistant",
-                tool_calls=[
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "weather", "arguments": {}},
-                    }
-                ],
-            )
+    history = render_tool_history(
+        ChatMessage(
+            role="assistant",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "weather", "arguments": {}},
+                }
+            ],
         )
+    )
+    assert history is not None
+    assert json.loads(history)["tool_calls"][0]["function"]["arguments"] == "{}"
 
     with pytest.raises(ToolBridgeRequestError) as raised:
         render_tool_history(
@@ -348,3 +349,167 @@ def test_parse_uses_fresh_uuid_call_ids_per_response() -> None:
     second = parse_tool_response(text, TOOLS, parallel_tool_calls=None)[1]
     assert first[0]["id"] != second[0]["id"]
     assert first[0]["id"].startswith("call_")
+
+
+def test_parse_preserves_valid_argument_string_formatting() -> None:
+    arguments = '{ "city": "Shanghai", "unit": "c" }'
+    text = json.dumps(
+        {
+            "type": "tool_calls",
+            "tool_calls": [{"name": "weather", "arguments": arguments}],
+            "content": None,
+        }
+    )
+    content, calls = parse_tool_response(text, TOOLS)
+    assert content is None
+    assert calls[0]["function"]["arguments"] == arguments
+
+
+def test_parse_accepts_object_arguments_and_missing_empty_arguments() -> None:
+    raw = {
+        "type": "tool_calls",
+        "tool_calls": [
+            {"name": "weather", "arguments": {"city": "Beijing"}},
+            {"name": "clock"},
+        ],
+        "content": "Working.",
+    }
+    content, calls = parse_tool_response(json.dumps(raw), TOOLS)
+    assert content == "Working."
+    assert calls[0]["function"]["arguments"] == '{"city":"Beijing"}'
+    assert calls[1]["function"]["arguments"] == "{}"
+
+
+def test_parse_unwraps_multiple_json_string_layers() -> None:
+    inner = envelope(("weather", {"city": "Shanghai"}))
+    text = json.dumps(json.dumps(inner))
+    content, calls = parse_tool_response(text, TOOLS)
+    assert content is None
+    assert calls[0]["function"]["name"] == "weather"
+
+
+def test_parse_repairs_only_trailing_commas_in_explicit_envelope() -> None:
+    text = (
+        '{"type":"tool_calls","tool_calls":'
+        '[{"name":"weather","arguments":"{\\"city\\":\\"Shanghai\\"}",},],}'
+    )
+    content, calls = parse_tool_response(text, TOOLS)
+    assert content is None
+    assert calls[0]["function"]["name"] == "weather"
+
+    ordinary = '{"answer": 42,}'
+    assert parse_tool_response(ordinary, TOOLS) == (ordinary, [])
+
+
+def test_parse_does_not_treat_nested_ordinary_json_as_tool_calls() -> None:
+    ordinary = json.dumps({"answer": envelope(("weather", {"city": "Shanghai"}))})
+    assert parse_tool_response(ordinary, TOOLS) == (ordinary, [])
+
+
+def test_parse_rejects_python_literals_and_broken_argument_json() -> None:
+    python_literal = (
+        '{"type":"tool_calls","tool_calls":'
+        "[{'name':'weather','arguments':{'city':'Shanghai'}}]}"
+    )
+    assert parse_tool_response(python_literal, TOOLS) == (
+        python_literal,
+        [],
+    )
+
+    broken = json.dumps(
+        {
+            "type": "tool_calls",
+            "tool_calls": [
+                {"name": "weather", "arguments": '{"city": }'}
+            ],
+        }
+    )
+    with pytest.raises(ToolBridgeResponseError) as raised:
+        parse_tool_response(broken, TOOLS)
+    assert raised.value.code == "invalid_tool_arguments"
+
+
+def test_parse_still_rejects_undeclared_functions_after_repair() -> None:
+    text = (
+        '{"type":"tool_calls","tool_calls":'
+        '[{"name":"missing","arguments":{},},],}'
+    )
+    with pytest.raises(ToolBridgeResponseError) as raised:
+        parse_tool_response(text, TOOLS)
+    assert raised.value.status_code == 502
+    assert raised.value.code == "undeclared_tool"
+
+
+def test_parse_required_semantics_survive_failed_repair() -> None:
+    with pytest.raises(ToolBridgeResponseError) as raised:
+        parse_tool_response(
+            '{"type":"tool_calls","tool_calls": [', TOOLS, "required"
+        )
+    assert raised.value.code == "invalid_tool_response"
+
+
+def test_parse_does_not_execute_python_literal_arguments() -> None:
+    raw = {
+        "type": "tool_calls",
+        "tool_calls": [
+            {"name": "weather", "arguments": "{'city': 'Shanghai'}"}
+        ],
+    }
+    with pytest.raises(ToolBridgeResponseError) as raised:
+        parse_tool_response(json.dumps(raw), TOOLS)
+    assert raised.value.code == "invalid_tool_arguments"
+
+
+def test_render_history_keeps_argument_text_and_accepts_objects() -> None:
+    arguments = '{ "city": "Shanghai", "unit": "c" }'
+    assistant = ChatMessage(
+        role="assistant",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "weather", "arguments": arguments},
+            }
+        ],
+    )
+    history = render_tool_history(assistant)
+    assert history is not None
+    assert (
+        json.loads(history)["tool_calls"][0]["function"]["arguments"]
+        == arguments
+    )
+
+    object_arguments = ChatMessage(
+        role="assistant",
+        tool_calls=[
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "arguments": {"city": "Shanghai"},
+                },
+            }
+        ],
+    )
+    history = render_tool_history(object_arguments)
+    assert history is not None
+    assert json.loads(history)["tool_calls"][0]["function"]["arguments"] == (
+        '{"city":"Shanghai"}'
+    )
+
+
+def test_render_history_missing_empty_arguments_become_object_string() -> None:
+    assistant = ChatMessage(
+        role="assistant",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "weather"},
+            }
+        ],
+    )
+    history = render_tool_history(assistant)
+    assert history is not None
+    assert json.loads(history)["tool_calls"][0]["function"]["arguments"] == "{}"

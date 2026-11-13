@@ -170,27 +170,27 @@ def test_invalid_reasoning_effort_is_rejected(effort) -> None:
     assert caught.value.code == "invalid_reasoning_effort"
 
 
-def test_explicit_reasoning_for_unverified_model_is_unsupported() -> None:
+def test_model_specific_reasoning_levels_are_checked() -> None:
     request = make_request(
-        model="person-kimi-k3-1-pro-261111",
-        reasoning_effort="high",
+        model="person-glm-5-3-261111",
+        reasoning_effort="medium",
     )
     with pytest.raises(RequestValidationError) as caught:
         validate_request(request)
     assert caught.value.status_code == 400
-    assert caught.value.code == "unsupported_parameter"
+    assert caught.value.code == "invalid_reasoning_effort"
 
 
-def test_unverified_model_keeps_default_without_memory_params(tmp_path) -> None:
-    request = make_request(model="person-kimi-k3-1-pro-261111")
+def test_model_uses_its_own_official_window_and_default(tmp_path) -> None:
+    request = make_request(model="seed-lite-7b")
     payload = make_payload(
         request,
         tmp_path,
-        model_key="person-kimi-k3-1-pro-261111",
+        model_key="seed-lite-7b",
     )
     model_config = payload["option"]["model_config"]
-    assert model_config["reasoning_effort"] == 7
-    assert "model_extra_params" not in model_config
+    assert model_config["reasoning_effort"] == 5
+    assert model_config["model_extra_params"] == {"memory_profile": "256k", "total_window_size": "256000"}
 
 
 def test_verified_model_gets_memory_params_in_all_effort_locations(tmp_path) -> None:
@@ -249,11 +249,8 @@ def test_text_and_input_text_content_are_preserved() -> None:
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("max_tokens", 100),
-        ("max_completion_tokens", 100),
         ("temperature", 0.2),
         ("top_p", 0.9),
-        ("stop", ["END"]),
     ],
 )
 def test_unsupported_sampling_and_limit_parameters_are_rejected(

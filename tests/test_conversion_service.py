@@ -115,7 +115,7 @@ async def test_reasoning_without_answer_is_error_in_both_modes(tmp_path, stream)
     class ReasoningOnly(Transport):
         async def stream(self, account, payload):
             yield {"_event": "STREAM_CHUNK", "content": {"content_block": [{"block_type": 10040}]}}
-            yield {"_event": "CHUNK_DELTA", "text": "reasoning only"}
+            yield {"_event": "CHUNK_DELTA", "text": "reasoning only", "_thinking": True}
 
     chat = service(tmp_path, ReasoningOnly())
     message = ChatCompletionRequest(messages=[{"role": "user", "content": "hello"}], stream=stream)

@@ -72,6 +72,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="seed-lite-7b",
         price="免费",
         description="轻量快速模型。",
+        context_window=256_000,
+        reasoning_levels=("low", "medium", "high"),
+        default_reasoning_effort="high",
+        memory_profile="256k",
     ),
     ModelSpec(
         id="person-kimi-k3-1-pro-261111",
@@ -79,6 +83,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-kimi-k3-1-pro-261111",
         price="0.95x",
         description="长上下文推理。",
+        context_window=300_000,
+        reasoning_levels=REASONING_LEVELS,
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="person-kimi-k3-1-pro-highspeed-261111",
@@ -86,6 +94,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-kimi-k3-1-pro-highspeed-261111",
         price="1.44x",
         description="高吞吐版本。",
+        context_window=300_000,
+        reasoning_levels=REASONING_LEVELS,
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="person-kimi-k3-261111",
@@ -93,6 +105,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-kimi-k3-261111",
         price="1.48x",
         description="Kimi K3 标准版。",
+        context_window=300_000,
+        reasoning_levels=REASONING_LEVELS,
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="person-glm-5-3-261111",
@@ -100,6 +116,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-glm-5-3-261111",
         price="0.80x",
         description="通用文本模型。",
+        context_window=300_000,
+        reasoning_levels=("low", "high", "max"),
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="person-glm-5-3-flash-261111",
@@ -107,6 +127,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-glm-5-3-flash-261111",
         price="0.08x",
         description="低倍率快速模型。",
+        context_window=300_000,
+        reasoning_levels=("low", "high", "max"),
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
     ModelSpec(
         id="person-deepseek-v4-pro-ga-260813",
@@ -114,6 +138,10 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         upstream_key="person-deepseek-v4-pro-ga-260813",
         price="0.46x",
         description="DeepSeek V4 Pro 工作模式。",
+        context_window=300_000,
+        reasoning_levels=REASONING_LEVELS,
+        default_reasoning_effort="max",
+        memory_profile="300k_230",
     ),
 )
 

@@ -8,6 +8,7 @@ import pytest
 
 from doubao_work2api.accounts import Account
 from doubao_work2api.config import Settings
+from doubao_work2api.errors import UpstreamAuthError, UpstreamChallengeError, UpstreamRateLimitError, UpstreamError
 from doubao_work2api.transport import DirectTransport, classify_body_error
 
 
@@ -32,6 +33,31 @@ def test_classify_body_error_ignores_success_codes() -> None:
     classify_body_error({"code": 0})
     classify_body_error({"code": 200})
     classify_body_error({})
+
+
+@pytest.mark.parametrize(('code', 'error'), [(710022004, UpstreamChallengeError), (710012001, UpstreamAuthError), (710022005, UpstreamRateLimitError), (999999, UpstreamError)])
+def test_stream_error_codes_are_classified_without_leaking_metadata(code, error):
+    with pytest.raises(error) as raised:
+        classify_body_error({'_event': 'STREAM_ERROR', 'error_code': code, 'code': 0, 'error_msg': 'private upstream metadata'})
+    assert raised.value.code == str(code)
+    assert 'private' not in str(raised.value)
+
+
+def test_stream_error_without_code_is_not_silently_successful():
+    with pytest.raises(UpstreamError) as raised:
+        classify_body_error({'_event': 'STREAM_ERROR'})
+    assert raised.value.code == 'upstream_stream_error'
+
+
+async def test_http_200_stream_challenge_raises_before_empty_response(monkeypatch):
+    transport = DirectTransport(Settings(upstream_base='https://upstream.test'))
+    mock_clients(monkeypatch, transport, lambda request: httpx.Response(200, headers={'content-type': 'text/event-stream'}, text='event: STREAM_ERROR\ndata: {"error_code":710022004,"error_msg":"private"}\n\nevent: SSE_REPLY_END\ndata: {"end_type":3}\n\n'))
+    try:
+        with pytest.raises(UpstreamChallengeError) as raised:
+            await consume(transport, make_account('one'))
+        assert raised.value.code == '710022004'
+    finally:
+        await transport.close()
 
 
 def make_account(account_id: str) -> Account:

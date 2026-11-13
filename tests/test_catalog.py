@@ -63,9 +63,9 @@ def test_public_capabilities_include_only_verified_values() -> None:
     assert "vision" not in deepseek
 
     other = public["person-kimi-k3-1-pro-261111"]
-    assert other["context_window"] is None
-    assert other["reasoning_efforts"] == []
-    assert "default_reasoning_effort" not in other
+    assert other["context_window"] == 300_000
+    assert other["reasoning_efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert other["default_reasoning_effort"] == "max"
     assert "max_output" not in other
     assert "vision" not in other
 

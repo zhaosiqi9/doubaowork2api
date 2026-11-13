@@ -67,6 +67,7 @@ _MAX_PARALLEL_CALLS = 16
 _MAX_ARGUMENT_BYTES = 1_048_576
 _MAX_ARGUMENT_DEPTH = 64
 _MAX_ENVELOPE_BYTES = 8_388_608
+_MISSING = object()
 
 
 def validate_tools(
@@ -218,7 +219,7 @@ def parse_tool_response(
                 code="tool_call_required",
             )
         return text, []
-    if not candidate.startswith("{"):
+    if not (candidate.startswith("{") or candidate.startswith('"')):
         if choice[0] in {"required", "function"}:
             raise ToolBridgeResponseError(
                 "The model did not return the required tool-call envelope.",
@@ -226,14 +227,13 @@ def parse_tool_response(
             )
         return text, []
 
-    try:
-        raw = json.loads(candidate, parse_constant=_reject_json_constant)
-    except (ValueError, RecursionError) as exc:
+    raw = _decode_tool_envelope(candidate)
+    if raw is None:
         if choice[0] in {"required", "function"}:
             raise ToolBridgeResponseError(
                 "The model returned malformed tool-call JSON.",
                 code="invalid_tool_response",
-            ) from exc
+            )
         return text, []
     if not isinstance(raw, dict) or raw.get("type") != "tool_calls":
         if choice[0] in {"required", "function"}:
@@ -276,14 +276,15 @@ def parse_tool_response(
                 f"The model called undeclared function {call.name!r}.",
                 code="undeclared_tool",
             )
-        arguments = _decode_arguments(call.arguments)
+        _decode_arguments(call.arguments)
         result.append(
             {
                 "id": _new_call_id(),
                 "type": "function",
                 "function": {
                     "name": call.name,
-                    "arguments": _json(arguments),
+                    # Preserve the provider's valid JSON text verbatim.
+                    "arguments": call.arguments,
                 },
             }
         )
@@ -453,7 +454,8 @@ def _validate_history_calls(raw_calls: Any) -> list[dict[str, Any]]:
             or not call_id.strip()
             or raw.get("type") != "function"
             or not isinstance(function, dict)
-            or set(function) != {"name", "arguments"}
+            or not {"name"} <= set(function)
+            or not set(function) <= {"name", "arguments"}
         ):
             raise ToolBridgeRequestError(
                 f"tool_calls[{index}] is malformed.",
@@ -467,15 +469,28 @@ def _validate_history_calls(raw_calls: Any) -> list[dict[str, Any]]:
         ids.add(call_id)
         name = function.get("name")
         _validate_name(name, f"tool_calls[{index}].function.name")
-        arguments = function.get("arguments")
-        if not isinstance(arguments, str):
-            raise ToolBridgeRequestError(
-                "Tool call arguments must be a JSON string.",
-                code="invalid_tool_history",
-            )
+        arguments = _normalize_history_arguments(
+            function.get("arguments", _MISSING)
+        )
+        result.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    return result
+
+
+def _normalize_history_arguments(value: Any) -> str:
+    if value is _MISSING or value is None:
+        return "{}"
+    if isinstance(value, str):
+        if not value.strip():
+            return "{}"
         try:
-            parsed = _loads_limited(arguments)
-        except ValueError as exc:
+            parsed = _loads_limited(value)
+        except (ValueError, RecursionError) as exc:
             raise ToolBridgeRequestError(
                 "Tool call arguments must be valid JSON.",
                 code="invalid_tool_history",
@@ -485,14 +500,21 @@ def _validate_history_calls(raw_calls: Any) -> list[dict[str, Any]]:
                 "Tool call arguments must encode a JSON object.",
                 code="invalid_tool_history",
             )
-        result.append(
-            {
-                "id": call_id,
-                "type": "function",
-                "function": {"name": name, "arguments": _json(parsed)},
-            }
-        )
-    return result
+        # Keep the exact provider string, including key order and whitespace.
+        return value
+    if isinstance(value, dict):
+        try:
+            _check_loaded_json(value)
+            return _json(value)
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ToolBridgeRequestError(
+                "Tool call arguments must be JSON-safe object data.",
+                code="invalid_tool_history",
+            ) from exc
+    raise ToolBridgeRequestError(
+        "Tool call arguments must be a JSON string or object.",
+        code="invalid_tool_history",
+    )
 
 
 def _parse_envelope(raw: dict[str, Any]) -> _ToolEnvelope:
@@ -516,12 +538,33 @@ def _parse_envelope(raw: dict[str, Any]) -> _ToolEnvelope:
     for call in calls:
         if (
             not isinstance(call, dict)
-            or set(call) != {"name", "arguments"}
-            or not isinstance(call.get("name"), str)
-            or not isinstance(call.get("arguments"), str)
+            or "name" not in call
+            or not set(call) <= {"name", "arguments"}
         ):
             raise ToolBridgeResponseError(
-                "Each tool call must contain exactly name and arguments strings.",
+                "Each tool call must contain exactly name and arguments.",
+                code="invalid_tool_response",
+            )
+        if not isinstance(call.get("name"), str):
+            raise ToolBridgeResponseError(
+                "Each tool call name must be a string.",
+                code="invalid_tool_response",
+            )
+        arguments = call.get("arguments")
+        if isinstance(arguments, dict):
+            try:
+                _check_loaded_json(arguments)
+                call["arguments"] = _json(arguments)
+            except (TypeError, ValueError, RecursionError) as exc:
+                raise ToolBridgeResponseError(
+                    "Tool call arguments must be JSON-safe object data.",
+                    code="invalid_tool_response",
+                ) from exc
+        elif arguments is None and "arguments" in call:
+            call["arguments"] = "{}"
+        elif not isinstance(arguments, str):
+            raise ToolBridgeResponseError(
+                "Each tool call arguments value must be a string or object.",
                 code="invalid_tool_response",
             )
     try:
@@ -553,6 +596,79 @@ def _validate_model_calls(calls: list[_FunctionCall]) -> list[_FunctionCall]:
                 code="invalid_tool_arguments",
             )
     return calls
+
+
+def _decode_tool_envelope(candidate: str) -> dict[str, Any] | None:
+    """Decode only explicit tool-call envelopes with narrow repair support."""
+    value: Any = candidate
+    layers = 0
+    while isinstance(value, str):
+        if layers >= 4:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            decoded = json.loads(
+                stripped, parse_constant=_reject_json_constant
+            )
+        except (ValueError, RecursionError):
+            if not stripped.startswith("{"):
+                return None
+            decoded = _repair_explicit_envelope(stripped)
+            if decoded is None:
+                return None
+        if isinstance(decoded, str) and decoded.strip() == stripped:
+            return None
+        value = decoded
+        layers += 1
+
+    if not isinstance(value, dict) or value.get("type") != "tool_calls":
+        return None
+    return _normalize_response_envelope(value)
+
+
+def _repair_explicit_envelope(value: str) -> dict[str, Any] | None:
+    if '"type"' not in value or '"tool_calls"' not in value:
+        return None
+    repaired = re.sub(
+        r",(?=\s*[}\]])",
+        "",
+        value,
+    )
+    if repaired == value:
+        return None
+    try:
+        decoded = json.loads(
+            repaired, parse_constant=_reject_json_constant
+        )
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(decoded, dict) or decoded.get("type") != "tool_calls":
+        return None
+    return decoded
+
+
+def _normalize_response_envelope(raw: dict[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(raw)
+    calls = normalized.get("tool_calls")
+    if not isinstance(calls, list):
+        return normalized
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        arguments = call.get("arguments")
+        if isinstance(arguments, dict):
+            try:
+                _check_loaded_json(arguments)
+                call["arguments"] = _json(arguments)
+            except (TypeError, ValueError, RecursionError):
+                continue
+        elif arguments is None and "arguments" in call:
+            call["arguments"] = "{}"
+        elif "arguments" not in call:
+            call["arguments"] = "{}"
+    return normalized
 
 
 def _decode_arguments(value: str) -> dict[str, Any]:

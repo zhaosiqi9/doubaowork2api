@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doubaowork2api"
-version = "0.2.1"
+version = "0.3.0"
 description = "Direct, account-pooled OpenAI-compatible gateway for DoubaoWork"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,8 @@ dependencies = [
   "httpx>=0.28",
   "pydantic>=2.10",
   "uvicorn[standard]>=0.34",
-  "cryptography>=45; sys_platform == 'win32'",
+  "cryptography>=45",
+  "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]

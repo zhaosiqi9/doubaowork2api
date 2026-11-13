@@ -96,8 +96,9 @@ async def test_image_service_uploads_to_selected_account_and_supports_both_modes
     else:
         result = await service.complete(chat, allowed_ids={"two"})
         assert result["choices"][0]["message"]["content"] == "synthetic image answer"
-        # Encoded image bytes are not interpreted as text tokens.
-        assert result["usage"]["prompt_tokens"] < 200
+        assert result["usage"]["is_estimated"] is True
+        # The gateway budgets an image allowance, rather than its base64 text.
+        assert result["usage"]["prompt_tokens"] >= 4096
     assert len(uploaded) == 1 and uploaded[0][0] == "two" and uploaded[0][1].data == PNG
     account_id, payload = transport.payloads[0]
     assert account_id == "two"

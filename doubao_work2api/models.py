@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from .catalog import normalize_model
 
@@ -10,7 +10,7 @@ from .catalog import normalize_model
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    role: Literal["system", "developer", "user", "assistant", "tool"]
+    role: Literal["system", "developer", "user", "assistant", "tool", "function"]
     content: str | list[dict[str, Any]] | None = None
     name: str | None = None
 
@@ -23,7 +23,8 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None
-    max_tokens: int | None = None
+    max_tokens: StrictInt | None = None
+    max_completion_tokens: StrictInt | None = None
     stop: str | list[str] | None = None
     user: str | None = None
     conversation_id: str | None = None
@@ -32,6 +33,9 @@ class ChatCompletionRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
+    response_format: dict[str, Any] | None = None
+    truncation: Literal["disabled", "auto"] = "disabled"
+    stream_options: dict[str, Any] | None = None
 
     @property
     def normalized_model(self) -> str:

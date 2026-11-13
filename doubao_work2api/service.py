@@ -6,6 +6,7 @@ import socket
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +25,7 @@ from .protocol import (
     chunk_payload,
     completion_id,
     completion_payload,
-    extract_text_fragments,
-    phase_markers,
+    UpstreamTextParser,
     sse_data,
     upstream_payload,
     validate_request,
@@ -34,6 +34,8 @@ from .transport import DirectTransport
 from .tool_bridge import parse_tool_response
 from .image_inputs import load_image, ImageInput
 from .image_upload import upload_image, ImageUploadError
+from .request_contract import enforce_contract, validate_tool_arguments, estimate_tokens
+from .output_budget import OutputBudget
 
 
 class ChatService:
@@ -60,45 +62,41 @@ class ChatService:
         self, request: ChatCompletionRequest, *,
         allowed_ids: set[str] | None = None, key_id: str = "",
     ) -> dict[str, Any]:
-        validate_request(request)
+        request = validate_request(request)
         log_entry = self._start_log(request, key_id)
         content: list[str] = []
         reasoning: list[str] = []
         tool_calls: list[dict[str, Any]] = []
+        finish_reason = "stop"
+        converted = self._converted_fragments(request, log_entry, allowed_ids)
         try:
-            async for kind, text in self._converted_fragments(
-                request, log_entry, allowed_ids
-            ):
+            async for kind, text in converted:
                 if kind == "content":
                     content.append(text)
                 elif kind == "tool_calls":
                     tool_calls.extend(text)
+                elif kind == "finish":
+                    finish_reason = text
                 else:
                     reasoning.append(text)
             answer = "".join(content)
-            if not answer and not tool_calls:
+            if not answer and not tool_calls and finish_reason != "length":
                 raise UpstreamError("Doubao returned an empty response.")
-            prompt_text = json.dumps({
-                "messages": [
-                    {**message.model_dump(exclude_none=True), "content": [
-                        {"type": "image_url"} if part.get("type") == "image_url" else part
-                        for part in message.content
-                    ]} if isinstance(message.content, list) else message.model_dump(exclude_none=True)
-                    for message in request.messages
-                ],
-                "tools": request.tools,
-            }, ensure_ascii=False)
             output_text = answer + "".join(reasoning)
             if tool_calls:
-                output_text += json.dumps(tool_calls, ensure_ascii=False)
+                output_text += json.dumps([call["function"] for call in tool_calls], ensure_ascii=False)
+            from .context import estimate_request_tokens
             result = completion_payload(
                 request_id=completion_id(),
                 model=request.normalized_model,
                 content=answer,
                 reasoning="".join(reasoning),
-                prompt_tokens=max(1, len(prompt_text) // 3),
-                completion_tokens=max(1, len(output_text) // 3),
+                prompt_tokens=estimate_request_tokens(request),
+                completion_tokens=estimate_tokens(output_text),
             )
+            result["choices"][0]["finish_reason"] = finish_reason
+            result["usage"]["is_estimated"] = True
+            result["gateway_context"] = getattr(request, "gateway_context", {})
             if tool_calls:
                 result["choices"][0]["message"]["content"] = answer or None
                 result["choices"][0]["message"]["tool_calls"] = tool_calls
@@ -109,16 +107,20 @@ class ChatService:
             self._log_failure(log_entry, str(exc))
             raise
         finally:
+            await converted.aclose()
             self._log_interrupted(log_entry)
 
     async def stream(
         self, request: ChatCompletionRequest, *,
         allowed_ids: set[str] | None = None, key_id: str = "",
     ) -> AsyncIterator[str]:
-        validate_request(request)
+        request = validate_request(request)
         log_entry = self._start_log(request, key_id)
         request_id = completion_id()
         has_tools = False
+        finish_reason = "stop"
+        visible_output: list[str] = []
+        converted = self._converted_fragments(request, log_entry, allowed_ids)
         try:
             yield sse_data(
                 chunk_payload(
@@ -127,17 +129,20 @@ class ChatService:
                     role="assistant",
                 )
             )
-            async for kind, text in self._converted_fragments(
-                request, log_entry, allowed_ids
-            ):
+            async for kind, text in converted:
                 if kind == "tool_calls":
                     has_tools = True
+                    visible_output.append(json.dumps([call["function"] for call in text], ensure_ascii=False))
                     chunk = chunk_payload(request_id=request_id, model=request.normalized_model)
                     chunk["choices"][0]["delta"] = {
                         "tool_calls": [dict(call, index=index) for index, call in enumerate(text)]
                     }
                     yield sse_data(chunk)
                     continue
+                if kind == "finish":
+                    finish_reason = text
+                    continue
+                visible_output.append(text)
                 field = "content" if kind == "content" else "reasoning"
                 yield sse_data(
                     chunk_payload(
@@ -150,15 +155,25 @@ class ChatService:
                 chunk_payload(
                     request_id=request_id,
                     model=request.normalized_model,
-                    finish_reason="tool_calls" if has_tools else "stop",
+                    finish_reason="tool_calls" if has_tools else finish_reason,
                 )
             )
+            if request.stream_options and request.stream_options.get("include_usage"):
+                from .context import estimate_request_tokens
+                prompt_count = estimate_request_tokens(request)
+                completion_count = estimate_tokens("".join(visible_output))
+                yield sse_data({
+                    "id": request_id, "object": "chat.completion.chunk", "model": request.normalized_model,
+                    "created": int(time.time()), "choices": [],
+                    "usage": {"prompt_tokens": prompt_count, "completion_tokens": completion_count, "total_tokens": prompt_count + completion_count, "is_estimated": True},
+                })
             yield "data: [DONE]\n\n"
             self._log_success(log_entry)
         except Exception as exc:
             self._log_failure(log_entry, str(exc))
             raise
         finally:
+            await converted.aclose()
             self._log_interrupted(log_entry)
 
     async def _converted_fragments(
@@ -175,27 +190,54 @@ class ChatService:
         tools = getattr(request, "tools", None)
         tool_choice = getattr(request, "tool_choice", None)
         bridge_enabled = bool(tools) and tool_choice != "none"
+        structured = bridge_enabled or bool(request.response_format and request.response_format.get("type") != "text")
+        budget = OutputBudget(request)
         buffered: list[str] = []
         has_answer = False
-        async for kind, text in self._fragments_with_retry(request, log_entry, allowed_ids):
-            if kind == "content" and text:
-                has_answer = True
-            if bridge_enabled and kind == "content":
-                buffered.append(text)
+        async with aclosing(self._fragments_with_retry(request, log_entry, allowed_ids)) as fragments:
+            async for kind, text in fragments:
+                if kind == "content" and text:
+                    has_answer = True
+                if structured and kind == "content":
+                    buffered.append(text)
+                else:
+                    visible = budget.feed(kind, text)
+                    if visible:
+                        yield kind, visible
+                    if budget.finished:
+                        yield "finish", budget.finish_reason
+                        return
+        calls: list[dict[str, Any]] = []
+        if structured:
+            raw = "".join(buffered)
+            if bridge_enabled:
+                content, calls = parse_tool_response(raw, tools, tool_choice, request.parallel_tool_calls)
+                validate_tool_arguments(calls, tools)
             else:
-                yield kind, text
-        if bridge_enabled:
-            content, calls = parse_tool_response(
-                "".join(buffered), tools, tool_choice,
-                getattr(request, "parallel_tool_calls", True),
-            )
+                content = raw
+            if not calls:
+                content = enforce_contract(content or "", request)
             if content:
-                yield "content", content
+                visible = budget.feed("content", content) + budget.flush()
+                if visible:
+                    if request.response_format and budget.finish_reason != "length":
+                        visible = enforce_contract(visible, request)
+                    yield "content", visible
             if calls:
-                yield "tool_calls", calls
+                call_text = json.dumps([call["function"] for call in calls], ensure_ascii=False)
+                if budget.remaining is not None and estimate_tokens(call_text) > budget.remaining:
+                    yield "finish", "length"
+                    return
+                if not budget.finished:
+                    yield "tool_calls", calls
             has_answer = bool(content or calls)
+        else:
+            tail = budget.flush()
+            if tail:
+                yield "content", tail
         if not has_answer:
             raise UpstreamError("Doubao returned an empty response.", code="empty_response")
+        yield "finish", "tool_calls" if calls and not budget.finished else budget.finish_reason
 
     async def _fragments_with_retry(
         self,
@@ -235,9 +277,10 @@ class ChatService:
                 self.request_log.account(log_entry, account.id)
             emitted = False
             try:
-                async for fragment in self._fragments(account, request, images):
-                    emitted = True
-                    yield fragment
+                async with aclosing(self._fragments(account, request, images)) as fragments:
+                    async for fragment in fragments:
+                        emitted = True
+                        yield fragment
                 if not emitted:
                     raise UpstreamError(
                         "Doubao returned an empty response.", code="empty_response"
@@ -307,18 +350,12 @@ class ChatService:
                 device_id=account.device_id,
                 images=uploaded,
             )
-            thinking = False
-            async for event in self.transport.stream(account, payload):
-                for _ in phase_markers(event):
-                    thinking = not thinking
-                if (
-                    event.get("_event") == "CHUNK_DELTA"
-                    and isinstance(event.get("text"), str)
-                ):
-                    event["_thinking"] = thinking
-                for kind, text in extract_text_fragments(event):
-                    if text:
-                        yield kind, text
+            parser = UpstreamTextParser()
+            async with aclosing(self.transport.stream(account, payload)) as events:
+                async for event in events:
+                    for kind, text in parser.feed(event):
+                        if text:
+                            yield kind, text
 
     def _workspace(self, account: Account) -> Path:
         safe_id = "".join(
