@@ -360,4 +360,3 @@ async def _load_remote_image(
     finally:
         if owned_client:
             await client.aclose()
-
